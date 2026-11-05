@@ -16,6 +16,7 @@ export const WORKLOG_RULES = {
 export const WORK_LOCATION_LABELS = {
   office: "Office",
   home: "Home",
+  other: "Other",
 } as const;
 
 export const TASK_STATUS_LABELS = {

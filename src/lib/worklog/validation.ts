@@ -35,8 +35,12 @@ export function validateEntryTimes(
   const breakClash = db.breaks.find(
     (brk) =>
       brk.employeeId === employeeId &&
-      brk.endAt !== null &&
-      overlaps(start, end, new Date(brk.startAt).getTime(), new Date(brk.endAt).getTime())
+      overlaps(
+        start,
+        end,
+        new Date(brk.startAt).getTime(),
+        brk.endAt ? new Date(brk.endAt).getTime() : Number.POSITIVE_INFINITY
+      )
   );
   if (breakClash) return fail("This time overlaps a break. Choose a different time.");
 

@@ -3,7 +3,7 @@ export type TaskId = string;
 export type EntryId = string;
 export type BreakId = string;
 
-export type WorkLocation = "office" | "home";
+export type WorkLocation = "office" | "home" | "other";
 
 export type TaskStatus = "not_started" | "ongoing" | "blocked" | "completed" | "dropped";
 

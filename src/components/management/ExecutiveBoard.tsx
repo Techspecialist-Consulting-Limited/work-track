@@ -90,7 +90,7 @@ function EmployeeSnapshot({ db, employee, dateKey, onOpen }: { db: WorkLogDataba
           <div><dt className="text-[#737A96]">Not logged</dt><dd className="font-semibold">{formatMinutes(day.notLoggedMinutes)}</dd></div>
           <div className="col-span-2">
             <dt className="text-[#737A96]">Location</dt>
-            <dd className="font-semibold">Office {pct(day.officeMinutes)}% · Home {pct(day.homeMinutes)}%</dd>
+            <dd className="font-semibold">Office {pct(day.officeMinutes)}% · Home {pct(day.homeMinutes)}% · Other {pct(day.otherMinutes)}%</dd>
           </div>
           <div className="col-span-2 text-[12px] text-[#737A96]">{open} open task{open === 1 ? "" : "s"}</div>
         </dl>

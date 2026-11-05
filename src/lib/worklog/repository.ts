@@ -1,8 +1,6 @@
 import { WORKLOG_STORAGE_KEY } from "./config";
 import { buildSeedDatabase } from "./seed";
 import {
-  validateBreakAllowance,
-  validateBreakWindow,
   validateDescription,
   validateEntryTimes,
   validateEvidenceLink,
@@ -104,6 +102,8 @@ export interface EntryInput {
   workLocation: WorkLocation;
   evidenceLink?: string;
   isReportedOvertime?: boolean;
+  statusAfterEntry?: TaskStatus;
+  statusReason?: string;
 }
 
 function checkEntryInput(db: WorkLogDatabase, input: EntryInput, ignoreId?: string): ValidationResult {
@@ -122,6 +122,13 @@ export function addWorkEntry(input: EntryInput): MutationResult {
   if (!task) return { ok: false, message: "Choose a task first." };
   if (task.currentStatus === "completed" || task.currentStatus === "dropped") {
     return { ok: false, message: "This task is closed. Start a new task or continue an open one." };
+  }
+  if (input.statusAfterEntry === "blocked" || input.statusAfterEntry === "dropped") {
+    const reason = validateReason(
+      input.statusReason,
+      input.statusAfterEntry === "blocked" ? "being blocked" : "dropping this task"
+    );
+    if (!reason.ok) return reason;
   }
   const split = input.isReportedOvertime
     ? { normalMinutes: 0, overtimeMinutes: Math.round((new Date(input.endAt).getTime() - new Date(input.startAt).getTime()) / 60_000) }
@@ -142,7 +149,21 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     createdAt: new Date().toISOString(),
     revisions: [],
   };
-  emit({ ...db, entries: [...db.entries, entry] });
+  const updatedTask = input.statusAfterEntry
+    ? {
+        ...task,
+        currentStatus: input.statusAfterEntry,
+        blockerReason: input.statusAfterEntry === "blocked" ? input.statusReason?.trim() : undefined,
+        droppedReason: input.statusAfterEntry === "dropped" ? input.statusReason?.trim() : undefined,
+        completedAt: input.statusAfterEntry === "completed" ? task.completedAt ?? new Date().toISOString() : undefined,
+        droppedAt: input.statusAfterEntry === "dropped" ? new Date().toISOString() : undefined,
+      }
+    : task;
+  emit({
+    ...db,
+    entries: [...db.entries, entry],
+    tasks: updatedTask === task ? db.tasks : db.tasks.map((item) => item.id === task.id ? updatedTask : item),
+  });
   return { ok: true };
 }
 
@@ -265,6 +286,9 @@ export function startBreak(employeeId: EmployeeId): MutationResult {
     return { ok: false, message: "A break is already running." };
   }
   const now = new Date().toISOString();
+  if (db.entries.some((entry) => entry.employeeId === employeeId && new Date(entry.endAt).getTime() > Date.now())) {
+    return { ok: false, message: "Finish or adjust any work entry that extends past now before starting a break." };
+  }
   const brk: BreakEntry = {
     id: `${employeeId}-break-${Date.now().toString(36)}`,
     employeeId,
@@ -281,10 +305,6 @@ export function endBreak(breakId: string): MutationResult {
   const brk = db.breaks.find((b) => b.id === breakId);
   if (!brk || brk.endAt !== null) return { ok: false, message: "No running break found." };
   const endAt = new Date().toISOString();
-  const windowCheck = validateBreakWindow(brk.startAt, endAt);
-  if (!windowCheck.ok) return windowCheck;
-  const allowance = validateBreakAllowance(db, brk.employeeId, brk.startAt, endAt, brk.id);
-  if (!allowance.ok) return allowance;
   emit({ ...db, breaks: db.breaks.map((b) => (b.id === breakId ? { ...b, endAt } : b)) });
   return { ok: true };
 }

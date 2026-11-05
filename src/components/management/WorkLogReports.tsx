@@ -69,6 +69,7 @@ export function WorkLogReports() {
               <option value="all">All</option>
               <option value="office">{WORK_LOCATION_LABELS.office}</option>
               <option value="home">{WORK_LOCATION_LABELS.home}</option>
+              <option value="other">{WORK_LOCATION_LABELS.other}</option>
             </select>
           </label>
           <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Task status at entry

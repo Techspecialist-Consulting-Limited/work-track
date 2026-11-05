@@ -34,7 +34,7 @@ interface MenuPosition {
 const MENU_GAP = 6;
 const VIEWPORT_PADDING = 8;
 const MENU_MAX_HEIGHT = 280;
-const OPTION_HEIGHT = 36;
+const OPTION_HEIGHT = 44;
 
 export function WorkTrackSelect<T extends string>({
   label,
@@ -230,7 +230,7 @@ export function WorkTrackSelect<T extends string>({
         disabled={disabled}
         onClick={() => open ? closeMenu() : openMenu()}
         onKeyDown={handleKeyDown}
-        className={`flex h-10 w-full min-w-0 items-center gap-2 rounded-[10px] border px-3 text-left text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7257FF] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45 ${
+        className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[10px] border px-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7257FF] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45 ${
           dark
             ? "border-white/[0.1] bg-[#0b1125]/90 text-wt-text hover:border-wt-violet/55 hover:bg-[#111832]"
             : "border-[#E7E6EF] bg-white text-[#535A76] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
@@ -270,7 +270,7 @@ export function WorkTrackSelect<T extends string>({
                   if (!option.disabled) setActiveIndex(index);
                 }}
                 onClick={() => selectOption(option)}
-                className={`flex min-h-9 cursor-pointer items-center gap-2 rounded-[8px] px-2.5 py-2 text-[12px] leading-snug transition-colors ${
+                className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-[8px] px-2.5 py-2 text-sm leading-snug transition-colors ${
                   option.disabled
                     ? "cursor-not-allowed text-[#A7A9B6]"
                     : selected
