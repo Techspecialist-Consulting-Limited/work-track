@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="wt-brand" x1="10" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9A83FF" />
+      <stop offset="0.46" stop-color="#7257FF" />
+      <stop offset="1" stop-color="#5A3DF0" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#wt-brand)" />
+  <path d="M35.8 9.5 19.4 36.2h10.1L27.4 54.5 44.6 27.1H34.2l1.6-17.6Z" fill="#FFFFFF" />
+</svg>
