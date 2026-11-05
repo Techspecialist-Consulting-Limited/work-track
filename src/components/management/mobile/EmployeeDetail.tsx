@@ -157,7 +157,7 @@ export function EmployeeDetailMobile({
           type="button"
           onClick={onClose}
           aria-label="Back to Team Board"
-          className="grid h-10 w-10 place-items-center rounded-full text-[#17172B] transition hover:bg-[#F5F4FB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8]"
+          className="grid h-10 w-10 place-items-center rounded-full bg-[#B42318] text-white shadow-sm transition hover:bg-[#912018] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318] focus-visible:ring-offset-2"
         >
           <ArrowLeft size={20} aria-hidden="true" />
         </button>
