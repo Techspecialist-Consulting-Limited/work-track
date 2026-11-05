@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState, useSyncExternalStore } from "react";
 import { ArrowLeft, Download } from "lucide-react";
-import { getDatabaseSnapshot, getServerSnapshot, getSessionRole, getSessionUser, subscribeToDatabase } from "@/lib/worklog/repository";
+import { getDatabaseSnapshot, getServerSnapshot, getSessionEmployeeId, getSessionRole, getSessionUser, subscribeToDatabase } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { filterEntries, type RangeFilter } from "@/lib/worklog/selectors";
@@ -16,6 +16,8 @@ const selectClass = "h-9 rounded-lg border border-[#E2E2EE] bg-white px-3 text-[
 
 export function WorkLogReports() {
   const db = useSyncExternalStore(subscribeToDatabase, getDatabaseSnapshot, getServerSnapshot);
+  const meEmployee = db.employees.find((e) => e.id === getSessionEmployeeId());
+  const canEditProfile = Boolean(meEmployee) && getSessionRole() !== "chairman";
   const today = getZonedDateKey(new Date());
   const [filter, setFilter] = useState<RangeFilter>({
     fromKey: "2026-10-26",
@@ -64,8 +66,11 @@ export function WorkLogReports() {
           </div>
           <div className="flex items-center gap-2">
             <ProfileMenu
-              name={getSessionUser()?.name ?? "Account"}
-              role={getSessionRole() === "chairman" ? "Chairman" : "HR"}
+              name={meEmployee?.name ?? getSessionUser()?.name ?? "Account"}
+              role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR"}
+              avatarUrl={meEmployee?.avatarUrl}
+              editable={canEditProfile}
+              required={canEditProfile && !meEmployee?.avatarUrl}
             />
             <button type="button" onClick={onExport} disabled={exporting} className="inline-flex h-9 items-center gap-2 rounded-lg bg-wt-violet px-4 text-[13px] font-medium text-white disabled:opacity-60">
               <Download className="h-4 w-4" /> {exporting ? "Preparing…" : "Export .xlsx"}

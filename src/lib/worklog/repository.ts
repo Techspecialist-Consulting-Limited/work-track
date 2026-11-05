@@ -114,7 +114,7 @@ export async function saveProfile(input: {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "updateProfile", payload: input }),
+      body: JSON.stringify({ action: "updateProfile", payload: input, scope: currentScope() }),
     });
     const data = (await res.json()) as StateResponse & { ok?: boolean; message?: string };
     if (data.db && isDatabase(data.db)) emit(data.db);

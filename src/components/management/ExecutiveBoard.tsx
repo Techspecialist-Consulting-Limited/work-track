@@ -87,6 +87,8 @@ function employeeStatus(day: DaySummary): EmployeeDay["status"] {
 
 function ExecutiveDesktopBoard() {
   const db = useSyncExternalStore(subscribeToDatabase, getDatabaseSnapshot, getServerSnapshot);
+  const meEmployee = db.employees.find((e) => e.id === getSessionEmployeeId());
+  const canEditProfile = Boolean(meEmployee) && getSessionRole() !== "chairman";
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
   const [dateKey, setDateKey] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -211,8 +213,11 @@ function ExecutiveDesktopBoard() {
               </Link>
             ) : null}
             <ProfileMenu
-              name={getSessionUser()?.name ?? "Account"}
-              role={getSessionRole() === "chairman" ? "Chairman" : "HR"}
+              name={meEmployee?.name ?? getSessionUser()?.name ?? "Account"}
+              role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR"}
+              avatarUrl={meEmployee?.avatarUrl}
+              editable={canEditProfile}
+              required={canEditProfile && !meEmployee?.avatarUrl}
             />
             <button
               type="button"
