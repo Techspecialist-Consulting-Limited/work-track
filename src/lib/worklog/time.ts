@@ -51,6 +51,17 @@ const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   year: "numeric",
 });
 
+const time12Formatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: WORKTRACK_SCHEDULE.timezone,
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
+export function formatTime12(iso: string): string {
+  return time12Formatter.format(new Date(iso));
+}
+
 export function formatTime(iso: string): string {
   return timeFormatter.format(new Date(iso));
 }

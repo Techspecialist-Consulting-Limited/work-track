@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { ExecutiveBoard } from "@/components/management/ExecutiveBoard";
+import { requirePageAccess } from "@/lib/auth/authorize";
 
 export const metadata: Metadata = {
   title: "Executive Board",
@@ -10,6 +11,7 @@ export const metadata: Metadata = {
 
 async function ExecutiveContent() {
   await connection();
+  await requirePageAccess(["hr", "chairman"]);
   return <ExecutiveBoard />;
 }
 

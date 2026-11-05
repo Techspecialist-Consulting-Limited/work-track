@@ -1,6 +1,6 @@
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 
-export const WORKLOG_STORAGE_KEY = "worktrack:worklog:v1";
+export const WORKLOG_STORAGE_KEY = "worktrack:worklog:v3";
 
 export const WORKLOG_RULES = {
   timezone: WORKTRACK_SCHEDULE.timezone,

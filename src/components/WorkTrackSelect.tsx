@@ -230,7 +230,7 @@ export function WorkTrackSelect<T extends string>({
         disabled={disabled}
         onClick={() => open ? closeMenu() : openMenu()}
         onKeyDown={handleKeyDown}
-        className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[10px] border px-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7257FF] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45 ${
+        className={`flex min-h-10 w-full min-w-0 items-center gap-2 rounded-lg border px-2.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45 sm:text-sm ${
           dark
             ? "border-white/[0.1] bg-[#0b1125]/90 text-wt-text hover:border-wt-violet/55 hover:bg-[#111832]"
             : "border-[#E7E6EF] bg-white text-[#535A76] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"

@@ -53,19 +53,22 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const workbook = new ExcelJS.Workbook();
   workbook.created = new Date();
 
-  // 1. Work Entries
-  const entriesSheet = workbook.addWorksheet("Work Entries");
+  // 1. Work Log — chronological entries per employee, matching the Team Board detail view.
+  const logSheet = workbook.addWorksheet("Work Log");
   styleSheet(
-    entriesSheet,
-    ["Date", "Employee", "Task", "Description", "Location", "Task status at entry", "Start", "End", "Duration (h)", "Normal (h)", "Overtime (h)", "Reported overtime", "Evidence", "Revisions"],
-    [14, 20, 30, 40, 12, 20, 9, 9, 13, 12, 13, 17, 30, 11]
+    logSheet,
+    ["Date", "Employee", "Start", "End", "Task", "Description", "Location", "Status at entry", "Overtime (h)", "Reported overtime", "Evidence"],
+    [14, 20, 8, 8, 30, 40, 12, 20, 13, 17, 30]
   );
-  for (const e of entries) {
+  const logEntries = [...entries].sort((a, b) =>
+    a.employeeId === b.employeeId ? a.startAt.localeCompare(b.startAt) : a.employeeId.localeCompare(b.employeeId)
+  );
+  for (const e of logEntries) {
     const r = entryRow(db, e);
-    entriesSheet.addRow([r.date, r.employee, r.task, r.description, r.location, r.statusAtEntry, r.start, r.end, r.durationHours, r.normalHours, r.overtimeHours, r.reportedOvertime, r.evidence, r.revisions]);
+    logSheet.addRow([r.date, r.employee, r.start, r.end, r.task, r.description, r.location, r.statusAtEntry, r.overtimeHours, r.reportedOvertime, r.evidence]);
   }
-  entriesSheet.getColumn(7).numFmt = "yyyy-mm-dd hh:mm";
-  entriesSheet.getColumn(8).numFmt = "yyyy-mm-dd hh:mm";
+  logSheet.getColumn(3).numFmt = "hh:mm";
+  logSheet.getColumn(4).numFmt = "hh:mm";
 
   // 2. Tasks
   const tasksSheet = workbook.addWorksheet("Tasks");

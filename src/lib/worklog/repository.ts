@@ -1,5 +1,4 @@
-import { WORKLOG_STORAGE_KEY } from "./config";
-import { buildSeedDatabase } from "./seed";
+import { splitIntervalMinutes } from "./time";
 import {
   validateDescription,
   validateEntryTimes,
@@ -8,7 +7,6 @@ import {
   validateTaskTitle,
   type ValidationResult,
 } from "./validation";
-import { splitIntervalMinutes } from "./time";
 import type {
   BreakEntry,
   EmployeeId,
@@ -21,9 +19,23 @@ import type {
 
 type Listener = () => void;
 
+const EMPTY_DB: WorkLogDatabase = { version: 1, employees: [], tasks: [], entries: [], breaks: [] };
+
 const listeners = new Set<Listener>();
 let cache: WorkLogDatabase | null = null;
-let serverSnapshot: WorkLogDatabase | null = null;
+let sessionEmployeeId: string | null = null;
+let sessionUser: { name: string | null; email: string | null } | null = null;
+let sessionRole: string | null = null;
+let loadPromise: Promise<void> | null = null;
+let hydrated = false;
+
+interface StateResponse {
+  db?: WorkLogDatabase;
+  employeeId?: string | null;
+  role?: string;
+  user?: { name: string | null; email: string | null } | null;
+  error?: string;
+}
 
 function isDatabase(value: unknown): value is WorkLogDatabase {
   if (!value || typeof value !== "object") return false;
@@ -31,67 +43,134 @@ function isDatabase(value: unknown): value is WorkLogDatabase {
   return db.version === 1 && Array.isArray(db.employees) && Array.isArray(db.tasks) && Array.isArray(db.entries) && Array.isArray(db.breaks);
 }
 
-function readFromStorage(): WorkLogDatabase {
-  if (typeof window === "undefined") return getServerSnapshot();
-  try {
-    const raw = window.localStorage.getItem(WORKLOG_STORAGE_KEY);
-    if (raw) {
-      const parsed: unknown = JSON.parse(raw);
-      if (isDatabase(parsed)) return parsed;
-    }
-  } catch {
-    // Corrupt or unreadable storage falls back to the seed data below.
-  }
-  const seeded = buildSeedDatabase();
-  persist(seeded);
-  return seeded;
-}
-
-function persist(db: WorkLogDatabase) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(WORKLOG_STORAGE_KEY, JSON.stringify(db));
-  } catch {
-    // Storage can be full or disabled; the in-memory copy still works for this session.
-  }
-}
-
 function emit(db: WorkLogDatabase) {
   cache = db;
-  persist(db);
   listeners.forEach((listener) => listener());
 }
 
+function currentScope(): "me" | "team" {
+  if (typeof window === "undefined") return "me";
+  return window.location.pathname.startsWith("/executive") ? "team" : "me";
+}
+
+async function fetchState(): Promise<void> {
+  const res = await fetch(`/api/worklog/state?scope=${currentScope()}`, { credentials: "same-origin" });
+  if (!res.ok) throw new Error("Failed to load work log.");
+  const data = (await res.json()) as StateResponse;
+  if (!data.db || !isDatabase(data.db)) throw new Error("Invalid work log response.");
+  sessionEmployeeId = data.employeeId ?? null;
+  sessionUser = data.user ?? null;
+  sessionRole = data.role ?? null;
+  hydrated = true;
+  emit(data.db);
+}
+
+function ensureLoaded() {
+  if (hydrated || loadPromise) return;
+  loadPromise = fetchState()
+    .catch(() => {
+      // Leave cache empty; UI shows its empty state. Retry on next mutation.
+      hydrated = false;
+    })
+    .finally(() => {
+      loadPromise = null;
+    });
+}
+
+/** Kick off the initial server load. Safe to call multiple times. */
+export function primeWorkLog(): void {
+  if (typeof window === "undefined") return;
+  ensureLoaded();
+}
+
 export function getServerSnapshot(): WorkLogDatabase {
-  if (!serverSnapshot) serverSnapshot = buildSeedDatabase();
-  return serverSnapshot;
+  return EMPTY_DB;
 }
 
 export function getDatabaseSnapshot(): WorkLogDatabase {
-  if (!cache) cache = readFromStorage();
-  return cache;
+  if (typeof window !== "undefined") ensureLoaded();
+  return cache ?? EMPTY_DB;
+}
+
+export function getSessionEmployeeId(): string | null {
+  return sessionEmployeeId;
+}
+
+export function getSessionUser(): { name: string | null; email: string | null } | null {
+  return sessionUser;
+}
+
+export function getSessionRole(): string | null {
+  return sessionRole;
+}
+
+/** Saves the staff member's own profile (name/photo). Resolves with the server result. */
+export async function saveProfile(input: {
+  fullName?: string;
+  avatarUrl?: string | null;
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    const res = await fetch("/api/worklog/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateProfile", payload: input }),
+    });
+    const data = (await res.json()) as StateResponse & { ok?: boolean; message?: string };
+    if (data.db && isDatabase(data.db)) emit(data.db);
+    if (!res.ok || data.ok === false) {
+      return { ok: false, message: data.message ?? "Could not save your profile." };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "Could not reach the server. Try again." };
+  }
 }
 
 export function subscribeToDatabase(listener: Listener): () => void {
   listeners.add(listener);
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === WORKLOG_STORAGE_KEY) {
-      cache = null;
-      listener();
-    }
-  };
-  if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
-  return () => {
-    listeners.delete(listener);
-    if (typeof window !== "undefined") window.removeEventListener("storage", onStorage);
-  };
+  ensureLoaded();
+  return () => listeners.delete(listener);
 }
 
 export function resetDatabase(): void {
-  emit(buildSeedDatabase());
+  hydrated = false;
+  cache = null;
+  loadPromise = null;
+  ensureLoaded();
 }
 
-export type MutationResult = ValidationResult;
+async function syncAction(
+  action: string,
+  payload: Record<string, unknown>
+): Promise<{ ok: boolean; message?: string; taskId?: string; adjustedEntry?: boolean } | null> {
+  try {
+    const res = await fetch("/api/worklog/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, payload, scope: currentScope() }),
+    });
+    const data = (await res.json()) as StateResponse & {
+      ok?: boolean;
+      message?: string;
+      taskId?: string;
+      adjustedEntry?: boolean;
+    };
+    if (data.db && isDatabase(data.db)) emit(data.db);
+    if (!res.ok || data.ok === false) {
+      // Server rejected — resync from authoritative state.
+      resetDatabase();
+      return { ok: false, message: data.message ?? "Could not save. Try again." };
+    }
+    return { ok: true, taskId: data.taskId, adjustedEntry: data.adjustedEntry };
+  } catch {
+    resetDatabase();
+    return { ok: false, message: "Could not reach the server. Try again." };
+  }
+}
+
+export type MutationResult = { ok: true } | { ok: false; message: string };
 
 export interface EntryInput {
   employeeId: EmployeeId;
@@ -104,6 +183,12 @@ export interface EntryInput {
   isReportedOvertime?: boolean;
   statusAfterEntry?: TaskStatus;
   statusReason?: string;
+}
+
+function newId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function checkEntryInput(db: WorkLogDatabase, input: EntryInput, ignoreId?: string): ValidationResult {
@@ -133,8 +218,9 @@ export function addWorkEntry(input: EntryInput): MutationResult {
   const split = input.isReportedOvertime
     ? { normalMinutes: 0, overtimeMinutes: Math.round((new Date(input.endAt).getTime() - new Date(input.startAt).getTime()) / 60_000) }
     : splitIntervalMinutes(input.startAt, input.endAt);
+  const id = newId();
   const entry: WorkEntry = {
-    id: `${input.employeeId}-entry-${Date.now().toString(36)}`,
+    id,
     employeeId: input.employeeId,
     taskId: task.id,
     description: input.description.trim(),
@@ -156,7 +242,6 @@ export function addWorkEntry(input: EntryInput): MutationResult {
         blockerReason: input.statusAfterEntry === "blocked" ? input.statusReason?.trim() : undefined,
         droppedReason: input.statusAfterEntry === "dropped" ? input.statusReason?.trim() : undefined,
         completedAt: input.statusAfterEntry === "completed" ? task.completedAt ?? new Date().toISOString() : undefined,
-        droppedAt: input.statusAfterEntry === "dropped" ? new Date().toISOString() : undefined,
       }
     : task;
   emit({
@@ -164,6 +249,7 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     entries: [...db.entries, entry],
     tasks: updatedTask === task ? db.tasks : db.tasks.map((item) => item.id === task.id ? updatedTask : item),
   });
+  void syncAction("addEntry", { id, input });
   return { ok: true };
 }
 
@@ -198,6 +284,7 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
     ],
   };
   emit({ ...db, entries: db.entries.map((e) => (e.id === entryId ? updated : e)) });
+  void syncAction("editEntry", { entryId, input });
   return { ok: true };
 }
 
@@ -210,7 +297,7 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
   const check = validateTaskTitle(input.title);
   if (!check.ok) return check;
   const db = getDatabaseSnapshot();
-  const taskId = `${input.employeeId}-task-${Date.now().toString(36)}`;
+  const taskId = newId();
   emit({
     ...db,
     tasks: [
@@ -224,6 +311,7 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
       },
     ],
   });
+  void syncAction("createTask", { ...input, id: taskId });
   return { ok: true, taskId };
 }
 
@@ -250,9 +338,9 @@ export function updateTaskStatus(
     blockerReason: status === "blocked" ? reason?.trim() : undefined,
     droppedReason: status === "dropped" ? reason?.trim() : undefined,
     completedAt: status === "completed" ? task.completedAt ?? now : undefined,
-    droppedAt: status === "dropped" ? now : undefined,
   };
   emit({ ...db, tasks: db.tasks.map((t) => (t.id === taskId ? updated : t)) });
+  void syncAction("updateTaskStatus", { taskId, status, reason });
   return { ok: true };
 }
 
@@ -277,27 +365,55 @@ export function setManagementReview(
         : t
     ),
   });
+  void syncAction("setReview", { taskId, status, note });
   return { ok: true };
 }
 
-export function startBreak(employeeId: EmployeeId): MutationResult {
+export function startBreak(employeeId: EmployeeId): MutationResult & { adjustedEntry?: boolean } {
   const db = getDatabaseSnapshot();
   if (db.breaks.some((b) => b.employeeId === employeeId && b.endAt === null)) {
     return { ok: false, message: "A break is already running." };
   }
-  const now = new Date().toISOString();
-  if (db.entries.some((entry) => entry.employeeId === employeeId && new Date(entry.endAt).getTime() > Date.now())) {
-    return { ok: false, message: "Finish or adjust any work entry that extends past now before starting a break." };
-  }
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const nowMs = nowDate.getTime();
+  let adjustedEntry = false;
+  const entries = db.entries.map((entry) => {
+    const startMs = new Date(entry.startAt).getTime();
+    const endMs = new Date(entry.endAt).getTime();
+    if (entry.employeeId !== employeeId || startMs > nowMs || endMs <= nowMs) return entry;
+    adjustedEntry = true;
+    const split = entry.isReportedOvertime
+      ? { normalMinutes: 0, overtimeMinutes: Math.round((nowMs - startMs) / 60_000) }
+      : splitIntervalMinutes(entry.startAt, now);
+    return {
+      ...entry,
+      endAt: now,
+      normalMinutes: split.normalMinutes,
+      overtimeMinutes: split.overtimeMinutes,
+      revisions: [
+        ...entry.revisions,
+        {
+          revisedAt: now,
+          previousDescription: entry.description,
+          previousStartAt: entry.startAt,
+          previousEndAt: entry.endAt,
+          previousWorkLocation: entry.workLocation,
+        },
+      ],
+    };
+  });
+  const id = newId();
   const brk: BreakEntry = {
-    id: `${employeeId}-break-${Date.now().toString(36)}`,
+    id,
     employeeId,
     startAt: now,
     endAt: null,
     createdAt: now,
   };
-  emit({ ...db, breaks: [...db.breaks, brk] });
-  return { ok: true };
+  emit({ ...db, entries, breaks: [...db.breaks, brk] });
+  void syncAction("startBreak", { id });
+  return { ok: true, adjustedEntry };
 }
 
 export function endBreak(breakId: string): MutationResult {
@@ -306,5 +422,6 @@ export function endBreak(breakId: string): MutationResult {
   if (!brk || brk.endAt !== null) return { ok: false, message: "No running break found." };
   const endAt = new Date().toISOString();
   emit({ ...db, breaks: db.breaks.map((b) => (b.id === breakId ? { ...b, endAt } : b)) });
+  void syncAction("endBreak", { breakId });
   return { ok: true };
 }

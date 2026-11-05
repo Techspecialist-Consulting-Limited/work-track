@@ -29,11 +29,14 @@ const DESCRIPTIONS = [
   "Prepared the update for the weekly review.",
 ];
 
-/** Exercise window: Mon 26 Oct 2026 to Tue 3 Nov 2026 (Lagos calendar days). */
+/** Exercise window: Mon 26 Oct 2026 to Fri 6 Nov 2026 (Lagos calendar days). */
 const WINDOW_START = { year: 2026, month: 10, day: 26 };
-const WINDOW_END = { year: 2026, month: 11, day: 3 };
+const WINDOW_END = { year: 2026, month: 11, day: 6 };
 /** Alex has no entries on this day, so the empty State A shows. */
 const OPEN_DAY = { employeeId: SIGNED_IN_EMPLOYEE_ID, month: 11, day: 4 };
+
+export const EXERCISE_START = WINDOW_START;
+export const EXERCISE_END = WINDOW_END;
 
 type CalendarDay = { year: number; month: number; day: number };
 
@@ -122,69 +125,60 @@ export function buildSeedDatabase(): WorkLogDatabase {
     for (const { year, month, day } of days) {
       if (!isWorkingDay({ year, month, day })) {
         if ((day + offset) % 3 === 0) {
-          entries.push(
-            buildEntry(
-              employee.id,
-              `${month}-${day}-weekend`,
-              employeeTasks[0],
-              lagosIso(year, month, day, 10, 0),
-              lagosIso(year, month, day, 12, 0),
-              "home",
-              day + offset
-            )
-          );
+          // Hourly entries, matching the staff logging grid.
+          [[10, 11], [11, 12]].forEach(([sh, eh], i) => {
+            entries.push(
+              buildEntry(
+                employee.id,
+                `${month}-${day}-weekend-${i}`,
+                employeeTasks[0],
+                lagosIso(year, month, day, sh, 0),
+                lagosIso(year, month, day, eh, 0),
+                "home",
+                day + i
+              )
+            );
+          });
         }
         continue;
       }
       if (employee.id === OPEN_DAY.employeeId && month === OPEN_DAY.month && day === OPEN_DAY.day) continue;
 
       const isLastDay = lastWorkingDay !== undefined && lastWorkingDay.month === month && lastWorkingDay.day === day;
-      const slots: Array<[number, number, number, number]> = [
-        [9, 0, 11, 0],
-        [11, 15, 13, 0],
-        [14, 0, 15, 30],
-        [16, 0, 17, 0],
-      ];
+      // Hourly slots on the staff grid: 09–12 morning, 14–17 afternoon.
       // The last working day stops at lunch so the afternoon is still open.
-      const usedSlots = isLastDay ? slots.slice(0, 2) : slots;
+      const usedSlots: Array<[number, number]> = isLastDay
+        ? [[9, 10], [10, 11], [11, 12]]
+        : [[9, 10], [10, 11], [11, 12], [14, 15], [15, 16], [16, 17]];
 
       breaks.push({
         id: `${employee.id}-break-${month}-${day}`,
         employeeId: employee.id,
         startAt: lagosIso(year, month, day, 13, 0),
-        endAt: lagosIso(year, month, day, 13, 45),
+        endAt: lagosIso(year, month, day, 14, 0),
         createdAt: lagosIso(year, month, day, 13, 0),
       });
 
-      usedSlots.forEach(([sh, sm, eh, em], slotIndex) => {
-        const task = employeeTasks[(day + slotIndex + offset) % employeeTasks.length];
+      usedSlots.forEach(([sh, eh], slotIndex) => {
+        // Morning stays on the primary task; afternoon rotates through the task list.
+        const task =
+          slotIndex < 3
+            ? employeeTasks[0]
+            : employeeTasks[(day + slotIndex + offset) % employeeTasks.length];
         const location: WorkLocation = (day + slotIndex + offset) % 3 === 0 ? "home" : "office";
         entries.push(
           buildEntry(
             employee.id,
             `${month}-${day}-${slotIndex}`,
             task,
-            lagosIso(year, month, day, sh, sm),
-            lagosIso(year, month, day, eh, em),
+            lagosIso(year, month, day, sh, 0),
+            lagosIso(year, month, day, eh, 0),
             location,
             day + slotIndex
           )
         );
       });
 
-      if ((day + offset) % 4 === 0) {
-        entries.push(
-          buildEntry(
-            employee.id,
-            `${month}-${day}-early`,
-            employeeTasks[0],
-            lagosIso(year, month, day, 7, 30),
-            lagosIso(year, month, day, 8, 30),
-            "home",
-            day
-          )
-        );
-      }
       if ((day + offset) % 3 === 0 && !isLastDay) {
         entries.push(
           buildEntry(

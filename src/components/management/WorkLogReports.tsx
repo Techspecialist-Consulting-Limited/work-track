@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useSyncExternalStore } from "react";
-import { Download } from "lucide-react";
-import { getDatabaseSnapshot, getServerSnapshot, subscribeToDatabase } from "@/lib/worklog/repository";
+import { ArrowLeft, Download } from "lucide-react";
+import { getDatabaseSnapshot, getServerSnapshot, getSessionRole, getSessionUser, subscribeToDatabase } from "@/lib/worklog/repository";
+import { ProfileMenu } from "@/components/worklog/ProfileMenu";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { filterEntries, type RangeFilter } from "@/lib/worklog/selectors";
 import { TASK_STATUS_LABELS, WORK_LOCATION_LABELS } from "@/lib/worklog/config";
@@ -41,14 +43,34 @@ export function WorkLogReports() {
   return (
     <main className="min-h-dvh bg-[#F7F7FC] px-4 py-8 text-wt-ink md:px-8">
       <div className="mx-auto max-w-6xl">
+        <Link
+          href="/executive"
+          className="mb-4 inline-flex min-h-10 items-center gap-1.5 rounded-full border border-[#EAE8F2] bg-white px-4 text-[13px] font-semibold text-[#17172B] transition hover:bg-[#F7F6FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] lg:hidden"
+        >
+          <ArrowLeft size={15} aria-hidden="true" />
+          Team Board
+        </Link>
         <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-wt-violet">Reports</p>
-            <h1 className="text-2xl font-semibold">Work log reports</h1>
+            <div className="flex items-baseline gap-2">
+              <h1 className="text-2xl font-semibold">Reports</h1>
+              <nav className="flex items-center gap-2 text-xs font-semibold" aria-label="Executive">
+                <Link href="/executive" className="text-[#777A91] hover:text-[#17172F]">Team Board</Link>
+                <span className="text-[#D8D5E6]" aria-hidden="true">·</span>
+                <span className="text-[#6C45F5]">Reports</span>
+              </nav>
+            </div>
+            <p className="mt-0.5 text-[12px] text-[#737A96]">Filter work entries and export them to Excel.</p>
           </div>
-          <button type="button" onClick={onExport} disabled={exporting} className="inline-flex h-9 items-center gap-2 rounded-lg bg-wt-violet px-4 text-[13px] font-medium text-white disabled:opacity-60">
-            <Download className="h-4 w-4" /> {exporting ? "Preparing…" : "Export .xlsx"}
-          </button>
+          <div className="flex items-center gap-2">
+            <ProfileMenu
+              name={getSessionUser()?.name ?? "Account"}
+              role={getSessionRole() === "chairman" ? "Chairman" : "HR"}
+            />
+            <button type="button" onClick={onExport} disabled={exporting} className="inline-flex h-9 items-center gap-2 rounded-lg bg-wt-violet px-4 text-[13px] font-medium text-white disabled:opacity-60">
+              <Download className="h-4 w-4" /> {exporting ? "Preparing…" : "Export .xlsx"}
+            </button>
+          </div>
         </header>
 
         <section className="mb-6 grid gap-3 rounded-2xl border border-[#E2E2EE] bg-white p-4 md:grid-cols-3 lg:grid-cols-6">

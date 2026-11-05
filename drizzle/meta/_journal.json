@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1793891422712,
+      "tag": "0000_jittery_mauler",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793892490330,
+      "tag": "0001_time-entry-nullable-end",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793898036691,
+      "tag": "0002_membership-per-role",
+      "breakpoints": true
+    }
+  ]
+}

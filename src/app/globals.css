@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-dm-sans);
 }
 
 @theme {
@@ -42,11 +42,23 @@ html {
 body {
   margin: 0;
   min-height: 100dvh;
+  overflow-x: clip;
   background: var(--color-wt-canvas);
   color: var(--color-wt-ink);
-  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+@media screen and (max-width: 768px) {
+  .staff-workspace input,
+  .staff-workspace textarea,
+  .staff-workspace select,
+  .staff-workspace [contenteditable="true"] {
+    font-size: 16px !important;
+    box-sizing: border-box;
+    max-width: 100%;
+  }
 }
 
 ::selection {

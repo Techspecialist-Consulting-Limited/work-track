@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
 import { WorkLogReports } from "@/components/management/WorkLogReports";
+import { requirePageAccess } from "@/lib/auth/authorize";
 
 export const metadata: Metadata = {
   title: "Reports",
@@ -10,6 +11,7 @@ export const metadata: Metadata = {
 
 async function ReportsContent() {
   await connection();
+  await requirePageAccess(["hr", "chairman"]);
   return <WorkLogReports />;
 }
 

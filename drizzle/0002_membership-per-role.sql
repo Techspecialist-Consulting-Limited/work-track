@@ -1,0 +1,2 @@
+DROP INDEX "memberships_tenant_oid_key";--> statement-breakpoint
+CREATE UNIQUE INDEX "memberships_tenant_oid_role_key" ON "worktrack_memberships" USING btree ("microsoft_tenant_id","microsoft_object_id","role");

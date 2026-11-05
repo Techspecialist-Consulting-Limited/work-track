@@ -1,12 +1,13 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { Geist } from "next/font/google";
+import { DM_Sans } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
   display: "swap",
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -20,6 +21,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
   themeColor: "#f4f2fa",
   colorScheme: "light",
 };
@@ -30,8 +33,8 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} h-full`}>
-      <body className="min-h-full font-sans text-wt-ink antialiased">{children}</body>
+    <html lang="en" className={`${dmSans.variable} h-full`}>
+      <body className="min-h-full text-wt-ink antialiased">{children}</body>
     </html>
   );
 }
