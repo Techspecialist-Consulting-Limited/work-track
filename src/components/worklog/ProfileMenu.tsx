@@ -25,11 +25,17 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
+    const timer = window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      reject(new Error("That image took too long to load. Try a smaller photo."));
+    }, 20_000);
     img.onload = () => {
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       resolve(img);
     };
     img.onerror = () => {
+      window.clearTimeout(timer);
       URL.revokeObjectURL(url);
       reject(new Error("That file is not a readable image."));
     };
@@ -43,6 +49,9 @@ function loadImage(file: File): Promise<HTMLImageElement> {
  */
 async function fileToAvatarDataUrl(file: File): Promise<string> {
   if (!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+  if (file.type === "image/heic" || file.type === "image/heif" || /\.hei[cf]$/i.test(file.name)) {
+    throw new Error("HEIC photos aren't supported — choose a JPG or PNG instead.");
+  }
   if (file.size > 10 * 1024 * 1024) throw new Error("Image is too large (max 10MB).");
 
   const img = await loadImage(file);
@@ -76,6 +85,7 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
   const [photoMode, setPhotoMode] = useState<"upload" | "link">("upload");
   const [photoLink, setPhotoLink] = useState("");
   const [saving, setSaving] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -94,10 +104,13 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
     e.target.value = "";
     if (!file) return;
     setError(null);
+    setProcessing(true);
     try {
       setPhoto(await fileToAvatarDataUrl(file));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not read that image.");
+    } finally {
+      setProcessing(false);
     }
   }
 
@@ -219,10 +232,11 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
                       <button
                         type="button"
                         onClick={() => fileRef.current?.click()}
-                        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#CFC8F3] bg-[#FAF9FF] px-3 text-sm font-semibold text-[#5A3ED0] transition hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                        disabled={processing}
+                        className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#CFC8F3] bg-[#FAF9FF] px-3 text-sm font-semibold text-[#5A3ED0] transition hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-wait disabled:opacity-60"
                       >
                         <Camera size={16} aria-hidden="true" />
-                        {photo ? "Change photo" : "Choose a photo"}
+                        {processing ? "Processing photo…" : photo ? "Change photo" : "Choose a photo"}
                       </button>
                     </>
                   ) : (

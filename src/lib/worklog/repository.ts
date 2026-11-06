@@ -452,3 +452,13 @@ export function endBreak(breakId: string): MutationResult {
   void syncAction("endBreak", { breakId });
   return { ok: true };
 }
+
+// Refresh the snapshot when the tab regains focus so other sessions'
+// changes (e.g. a new profile photo) appear without a manual reload.
+if (typeof window !== "undefined") {
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && hydrated) {
+      void fetchState().catch(() => {});
+    }
+  });
+}
