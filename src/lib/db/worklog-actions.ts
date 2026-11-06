@@ -266,7 +266,7 @@ export async function createTaskAction(
     id: input.id,
     employeeId,
     title,
-    currentStatus: "not_started",
+    currentStatus: "ongoing",
   });
   await audit(membership, "task.create", "task", input.id, null, { title });
   return { ok: true, taskId: input.id };

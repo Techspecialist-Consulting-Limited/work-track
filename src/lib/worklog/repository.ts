@@ -320,7 +320,7 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
         id: taskId,
         employeeId: input.employeeId,
         title: input.title.trim(),
-        currentStatus: "not_started",
+        currentStatus: "ongoing",
         createdAt: new Date().toISOString(),
       },
     ],
