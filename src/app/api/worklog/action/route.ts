@@ -6,6 +6,7 @@ import {
   createTaskAction,
   editWorkEntryAction,
   endBreakAction,
+  inviteChairmanAction,
   setManagementReviewAction,
   snapshotFor,
   startBreakAction,
@@ -61,6 +62,9 @@ export async function POST(request: Request) {
         break;
       case "endBreak":
         result = await endBreakAction(membership, String(p.breakId));
+        break;
+      case "inviteChairman":
+        result = await inviteChairmanAction(membership, p as never);
         break;
       default:
         return NextResponse.json({ ok: false, message: "Unknown action." }, { status: 400 });

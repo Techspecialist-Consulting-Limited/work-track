@@ -127,6 +127,11 @@ export async function saveProfile(input: {
   }
 }
 
+/** HR/Chairman: invite the chairman by email. Resolves with the server result. */
+export function inviteChairman(email: string) {
+  return syncAction("inviteChairman", { email });
+}
+
 export function subscribeToDatabase(listener: Listener): () => void {
   listeners.add(listener);
   ensureLoaded();

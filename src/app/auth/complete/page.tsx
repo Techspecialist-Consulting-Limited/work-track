@@ -9,6 +9,7 @@ import {
   getMembership,
   hasAnyMembership,
   LOGIN_ROLE_COOKIE,
+  redeemInvitation,
   type WorkTrackRole,
 } from "@/lib/auth/authorize";
 
@@ -51,6 +52,16 @@ async function CompleteContent({
         requested
       );
     }
+  } else if (!membership && requested === "chairman") {
+    // Chairman access is by invitation only — the invited Entra email must match.
+    membership = await redeemInvitation(
+      {
+        oid: (session.user as { oid?: string }).oid,
+        tid: (session.user as { tid?: string }).tid,
+        email: session.user.email,
+      },
+      "chairman"
+    );
   }
   if (!membership) {
     const oid = (session.user as { oid?: string }).oid;

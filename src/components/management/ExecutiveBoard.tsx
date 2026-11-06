@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { WorkTrackSelect } from "@/components/WorkTrackSelect";
 import { ExecutiveMobile } from "./mobile/ExecutiveMobile";
+import { InviteChairman } from "./InviteChairman";
 import { Avatar } from "./mobile/shared";
 import {
   getDatabaseSnapshot,
@@ -212,6 +213,7 @@ function ExecutiveDesktopBoard() {
                 My Work Log
               </Link>
             ) : null}
+            <InviteChairman />
             <ProfileMenu
               name={meEmployee?.name ?? getSessionUser()?.name ?? "Account"}
               role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR"}

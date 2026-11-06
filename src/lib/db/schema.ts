@@ -167,6 +167,19 @@ export const auditEvents = pgTable(
   (t) => [index("audit_events_entity_idx").on(t.entityType, t.entityId)]
 );
 
+export const invitations = pgTable(
+  "worktrack_invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    role: membershipRoleEnum("role").notNull(),
+    invitedByMembershipId: uuid("invited_by_membership_id").references(() => memberships.id),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("invitations_email_role_key").on(t.email, t.role)]
+);
+
 export const worktrackSettings = pgTable("worktrack_settings", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { auth } from "./auth";
 import { db } from "@/lib/db";
-import { employees, memberships } from "@/lib/db/schema";
+import { employees, invitations, memberships } from "@/lib/db/schema";
 
 export type WorkTrackRole = "staff" | "hr" | "chairman";
 export type ManagementRole = "hr" | "chairman";
@@ -174,6 +174,52 @@ export async function hasAnyMembership(user: {
     )
     .limit(1);
   return rows.length > 0;
+}
+
+/**
+ * Redeem a pending invitation: the invited email must match the signed-in
+ * Entra account exactly (case-insensitive). Creates the membership and marks
+ * the invitation accepted. Returns the resolved membership or null.
+ */
+export async function redeemInvitation(
+  user: { oid?: string; tid?: string; email?: string | null },
+  role: WorkTrackRole
+): Promise<WorkTrackMembership | null> {
+  if (!user.oid || !user.tid || !user.email) return null;
+  const email = user.email.trim().toLowerCase();
+
+  const invite = (
+    await db
+      .select({ id: invitations.id })
+      .from(invitations)
+      .where(
+        and(
+          eq(invitations.email, email),
+          eq(invitations.role, role),
+          isNull(invitations.acceptedAt)
+        )
+      )
+      .limit(1)
+  )[0];
+  if (!invite) return null;
+
+  await db
+    .insert(memberships)
+    .values({
+      role,
+      microsoftTenantId: user.tid,
+      microsoftObjectId: user.oid,
+      employeeId: null,
+      isActive: true,
+    })
+    .onConflictDoNothing();
+
+  await db
+    .update(invitations)
+    .set({ acceptedAt: new Date(), updatedAt: new Date() })
+    .where(eq(invitations.id, invite.id));
+
+  return getMembership();
 }
 
 /** Page-level guard: resolves membership and enforces the allowed roles. */

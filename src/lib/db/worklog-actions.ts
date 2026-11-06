@@ -1,7 +1,7 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "./index";
-import { auditEvents, employees, tasks, taskStatusHistory, timeEntries } from "./schema";
+import { auditEvents, employees, invitations, tasks, taskStatusHistory, timeEntries } from "./schema";
 import { loadWorkLogDb } from "./worklog-data";
 import type { WorkTrackMembership } from "@/lib/auth/authorize";
 import { validateReason } from "@/lib/worklog/validation";
@@ -401,6 +401,43 @@ export async function updateProfileAction(
     fullName: set.fullName ?? null,
     avatarChanged: input.avatarUrl !== undefined,
   });
+  return { ok: true };
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** HR/Chairman invite the chairman by email; redeemed on their first Entra sign-in. */
+export async function inviteChairmanAction(
+  membership: WorkTrackMembership,
+  input: { email: string }
+): Promise<ActionResult> {
+  if (membership.role !== "hr" && membership.role !== "chairman") {
+    return { ok: false, message: "Management access required." };
+  }
+  const email = input.email.trim().toLowerCase();
+  if (email.length > 254 || !EMAIL_RE.test(email)) {
+    return { ok: false, message: "Enter a valid email address." };
+  }
+  if (membership.user.email && email === membership.user.email.toLowerCase()) {
+    return { ok: false, message: "That's your own account." };
+  }
+
+  await db
+    .insert(invitations)
+    .values({
+      email,
+      role: "chairman",
+      invitedByMembershipId: membership.membershipId,
+    })
+    .onConflictDoUpdate({
+      target: [invitations.email, invitations.role],
+      set: {
+        invitedByMembershipId: membership.membershipId,
+        acceptedAt: null,
+        updatedAt: new Date(),
+      },
+    });
+  await audit(membership, "member.invite", "invitation", null, null, { email, role: "chairman" });
   return { ok: true };
 }
 

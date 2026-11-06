@@ -24,6 +24,7 @@ import {
   subscribeToDatabase,
 } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
+import { InviteChairman } from "../InviteChairman";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { EXERCISE_END, EXERCISE_START } from "@/lib/worklog/seed";
 import { getDaySummary } from "@/lib/worklog/selectors";
@@ -184,6 +185,7 @@ export function ExecutiveMobile() {
                 My Work
               </Link>
             ) : null}
+            <InviteChairman compact />
             <ProfileMenu
               name={meEmployee?.name ?? getSessionUser()?.name ?? "Account"}
               role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR"}
