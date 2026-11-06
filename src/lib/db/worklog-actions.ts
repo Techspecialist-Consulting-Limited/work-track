@@ -115,7 +115,7 @@ export async function addWorkEntryAction(
         overtimeMinutes: split.overtimeMinutes,
         workLocation: input.workLocation,
         workType: split.overtimeMinutes >= minutesBetween(input.startAt, input.endAt) ? "overtime" : "normal",
-        taskStatusSnapshot: task.currentStatus,
+        taskStatusSnapshot: input.statusAfterEntry ?? task.currentStatus,
         evidenceLink: input.evidenceLink?.trim() || null,
         isReportedOvertime: Boolean(input.isReportedOvertime),
         createdByMembershipId: membership.membershipId,

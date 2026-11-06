@@ -241,7 +241,7 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     startAt: input.startAt,
     endAt: input.endAt,
     workLocation: input.workLocation,
-    statusAtEntry: task.currentStatus,
+    statusAtEntry: input.statusAfterEntry ?? task.currentStatus,
     normalMinutes: split.normalMinutes,
     overtimeMinutes: split.overtimeMinutes,
     isReportedOvertime: Boolean(input.isReportedOvertime),

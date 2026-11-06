@@ -52,7 +52,7 @@ export interface WorkEntry {
   startAt: string;
   endAt: string;
   workLocation: WorkLocation;
-  /** Status of the task at the moment the entry was logged. Never changes after creation. */
+  /** Status recorded for this entry — the status chosen when logging (defaults to the task's status). Never changes after creation. */
   statusAtEntry: TaskStatus;
   /** Minutes inside the 09:00–17:00 working window on a working day. */
   normalMinutes: number;
