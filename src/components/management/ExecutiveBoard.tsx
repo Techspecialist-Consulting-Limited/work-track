@@ -9,6 +9,7 @@ import {
   Coffee,
   Download,
   ExternalLink,
+  FileText,
   X,
   Zap,
 } from "lucide-react";
@@ -191,13 +192,6 @@ function ExecutiveDesktopBoard() {
             <div>
               <div className="flex items-baseline gap-2">
                 <h1 className="text-lg font-bold tracking-tight">Team Board</h1>
-                <nav className="flex items-center gap-2 text-xs font-semibold" aria-label="Executive">
-                  <span className="text-[#6C45F5]">Team Board</span>
-                  <span className="text-[#D8D5E6]" aria-hidden="true">·</span>
-                  <Link href="/executive/reports" className="text-[#777A91] hover:text-[#17172F]">
-                    Reports
-                  </Link>
-                </nav>
               </div>
               <p className="text-[11px] text-[#777A91]">
                 Work exercise: {formatDateLabel(EXERCISE_START_KEY)} – {formatDateLabel(EXERCISE_END_KEY)}
@@ -205,6 +199,13 @@ function ExecutiveDesktopBoard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              href="/executive/reports"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[#E7E6F0] px-3 text-sm font-semibold text-[#4A4665] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+            >
+              <FileText size={15} aria-hidden="true" />
+              Reports
+            </Link>
             {getSessionEmployeeId() && getSessionRole() !== "chairman" ? (
               <Link
                 href="/"
