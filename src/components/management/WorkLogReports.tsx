@@ -124,11 +124,6 @@ export function WorkLogReports() {
           <div>
             <div className="flex items-baseline gap-2">
               <h1 className="text-2xl font-semibold">Reports</h1>
-              <nav className="flex items-center gap-2 text-xs font-semibold" aria-label="Executive">
-                <Link href="/executive" className="text-[#777A91] hover:text-[#17172F]">Team Board</Link>
-                <span className="text-[#D8D5E6]" aria-hidden="true">·</span>
-                <span className="text-[#6C45F5]">Reports</span>
-              </nav>
             </div>
             <p className="mt-0.5 text-[12px] text-[#737A96]">Filter work entries and export them to Excel.</p>
           </div>
