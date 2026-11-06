@@ -625,6 +625,11 @@ function EmployeeDrawer({
   };
 
   const completedTasks = db.tasks.filter((t) => t.employeeId === employee.id && t.currentStatus === "completed");
+  const employeeTaskIds = new Set(db.tasks.filter((t) => t.employeeId === employee.id).map((t) => t.id));
+  const statusEvents = db.statusHistory
+    .filter((e) => employeeTaskIds.has(e.taskId))
+    .slice()
+    .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -877,6 +882,32 @@ function EmployeeDrawer({
             )}
             {error ? <p role="alert" className="mt-2 text-xs text-[#B43A3A]">{error}</p> : null}
           </section>
+
+          {statusEvents.length > 0 ? (
+            <section className="mt-4 border-t border-[#EEEAF2] pt-3">
+              <h3 className="mb-2 text-[13px] font-semibold text-[#39364F]">Status changes</h3>
+              <ol className="space-y-1.5">
+                {statusEvents.map((e) => {
+                  const task = getTaskById(db, e.taskId);
+                  return (
+                    <li key={e.id} className="flex items-baseline justify-between gap-3 rounded-lg bg-[#F7F7FC] px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold text-[#17172F]">{task?.title ?? "Task"}</p>
+                        <p className="text-[11px] text-[#777A91]">
+                          {e.previousStatus ? `${STATUS_LABELS_SHORT[e.previousStatus]} → ` : ""}
+                          <span className="font-semibold text-[#5A3ED0]">{STATUS_LABELS_SHORT[e.newStatus]}</span>
+                          {e.changeNote ? ` — ${e.changeNote}` : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-[10px] font-medium text-[#8B8B9A]">
+                        {formatDateLabel(dateKeyOf(e.changedAt))} {formatTime(e.changedAt)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ) : null}
         </div>
 
         <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[#EEEAF2] px-4 py-2.5 sm:px-6">

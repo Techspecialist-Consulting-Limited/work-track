@@ -195,7 +195,7 @@ export function buildSeedDatabase(): WorkLogDatabase {
     }
   }
 
-  return { version: 1, employees: SEED_EMPLOYEES, tasks, entries, breaks };
+  return { version: 1, employees: SEED_EMPLOYEES, tasks, entries, breaks, statusHistory: [] };
 }
 
 function isWorkingDay({ year, month, day }: CalendarDay): boolean {

@@ -74,10 +74,21 @@ export interface BreakEntry {
   createdAt: string;
 }
 
+export interface StatusHistoryEvent {
+  id: string;
+  taskId: TaskId;
+  previousStatus: TaskStatus | null;
+  newStatus: TaskStatus;
+  changedBy?: string;
+  changeNote?: string;
+  changedAt: string;
+}
+
 export interface WorkLogDatabase {
   version: 1;
   employees: Employee[];
   tasks: Task[];
   entries: WorkEntry[];
   breaks: BreakEntry[];
+  statusHistory: StatusHistoryEvent[];
 }

@@ -28,7 +28,7 @@ function queueAfter(taskId: string | undefined, send: () => void) {
   else send();
 }
 
-const EMPTY_DB: WorkLogDatabase = { version: 1, employees: [], tasks: [], entries: [], breaks: [] };
+const EMPTY_DB: WorkLogDatabase = { version: 1, employees: [], tasks: [], entries: [], breaks: [], statusHistory: [] };
 
 const listeners = new Set<Listener>();
 let cache: WorkLogDatabase | null = null;

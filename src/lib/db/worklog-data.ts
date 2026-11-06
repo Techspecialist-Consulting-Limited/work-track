@@ -1,7 +1,7 @@
 import "server-only";
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./index";
-import { employees, tasks, timeEntries } from "./schema";
+import { employees, tasks, taskStatusHistory, timeEntries } from "./schema";
 import type {
   BreakEntry,
   Employee,
@@ -27,16 +27,22 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
 
   const employeeIds = employeeRows.map((e) => e.id);
   if (employeeIds.length === 0) {
-    return { version: 1, employees: [], tasks: [], entries: [], breaks: [] };
+    return { version: 1, employees: [], tasks: [], entries: [], breaks: [], statusHistory: [] };
   }
 
-  const [taskRows, entryRows] = await Promise.all([
+  const [taskRows, entryRows, historyRows] = await Promise.all([
     db.select().from(tasks).where(inArray(tasks.employeeId, employeeIds)).orderBy(asc(tasks.createdAt)),
     db
       .select()
       .from(timeEntries)
       .where(inArray(timeEntries.employeeId, employeeIds))
       .orderBy(asc(timeEntries.startAt)),
+    db
+      .select()
+      .from(taskStatusHistory)
+      .innerJoin(tasks, eq(taskStatusHistory.taskId, tasks.id))
+      .where(inArray(tasks.employeeId, employeeIds))
+      .orderBy(asc(taskStatusHistory.changedAt)),
   ]);
 
   const taskUuidToClient = new Map(taskRows.map((t) => [t.id, t.id]));
@@ -96,5 +102,15 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     avatarUrl: e.avatarUrl ?? undefined,
   }));
 
-  return { version: 1, employees: mappedEmployees, tasks: mappedTasks, entries: workEntries, breaks };
+  const statusHistory = historyRows.map((row) => ({
+    id: row.task_status_history.id,
+    taskId: row.task_status_history.taskId,
+    previousStatus: row.task_status_history.previousStatus,
+    newStatus: row.task_status_history.newStatus,
+    changedBy: row.task_status_history.changedByMembershipId ?? undefined,
+    changeNote: row.task_status_history.changeNote ?? undefined,
+    changedAt: row.task_status_history.changedAt.toISOString(),
+  }));
+
+  return { version: 1, employees: mappedEmployees, tasks: mappedTasks, entries: workEntries, breaks, statusHistory };
 }
