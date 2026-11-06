@@ -103,6 +103,79 @@ export async function requireManagement(): Promise<WorkTrackMembership> {
   return membership;
 }
 
+/**
+ * Self-service provisioning: the Entra app registration is single-tenant, so a
+ * successful Microsoft sign-in already means "company account". Staff and HR
+ * memberships are created on first login (with an employee record, since HR
+ * can also log tasks). Chairman stays manual-only via
+ * scripts/provision-member.mjs.
+ */
+export async function autoProvisionMembership(
+  user: { oid?: string; tid?: string; name?: string | null; email?: string | null },
+  role: WorkTrackRole
+): Promise<WorkTrackMembership | null> {
+  if (role === "chairman" || !user.oid || !user.tid) return null;
+
+  const employeeCode = `emp-${user.oid.slice(0, 8)}`;
+  const fullName =
+    user.name?.trim() ||
+    user.email?.split("@")[0].replace(/[._-]+/g, " ") ||
+    "Team Member";
+
+  let employeeId =
+    (
+      await db
+        .select({ id: employees.id })
+        .from(employees)
+        .where(eq(employees.employeeCode, employeeCode))
+        .limit(1)
+    )[0]?.id ?? null;
+
+  if (!employeeId) {
+    employeeId =
+      (
+        await db
+          .insert(employees)
+          .values({ employeeCode, fullName, jobTitle: "Team Member", department: "" })
+          .returning({ id: employees.id })
+      )[0]?.id ?? null;
+  }
+  if (!employeeId) return null;
+
+  await db
+    .insert(memberships)
+    .values({
+      role,
+      microsoftTenantId: user.tid,
+      microsoftObjectId: user.oid,
+      employeeId,
+      isActive: true,
+    })
+    .onConflictDoNothing();
+
+  return getMembership();
+}
+
+/** True if the user already holds ANY active membership (any role). */
+export async function hasAnyMembership(user: {
+  oid?: string;
+  tid?: string;
+}): Promise<boolean> {
+  if (!user.oid || !user.tid) return false;
+  const rows = await db
+    .select({ id: memberships.id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.microsoftTenantId, user.tid),
+        eq(memberships.microsoftObjectId, user.oid),
+        eq(memberships.isActive, true)
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 /** Page-level guard: resolves membership and enforces the allowed roles. */
 export async function requirePageAccess(
   allowed: WorkTrackRole[]

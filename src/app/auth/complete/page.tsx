@@ -4,7 +4,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { auth } from "@/lib/auth/auth";
-import { getMembership, LOGIN_ROLE_COOKIE, type WorkTrackRole } from "@/lib/auth/authorize";
+import {
+  autoProvisionMembership,
+  getMembership,
+  hasAnyMembership,
+  LOGIN_ROLE_COOKIE,
+  type WorkTrackRole,
+} from "@/lib/auth/authorize";
 
 const ROLE_HOME: Record<WorkTrackRole, string> = {
   staff: "/",
@@ -27,10 +33,38 @@ async function CompleteContent({
   const session = await auth();
   if (!session?.user) redirect("/login");
 
-  const membership = await getMembership();
+  const store = await cookies();
+  const requested = store.get(LOGIN_ROLE_COOKIE)?.value as WorkTrackRole | undefined;
+
+  // First login only: staff/HR self-provision (Entra sign-in = company
+  // account). Existing members never gain extra roles this way, and
+  // chairman remains manual-only.
+  let membership = await getMembership();
+  if (!membership && requested && requested !== "chairman") {
+    const identity = {
+      oid: (session.user as { oid?: string }).oid,
+      tid: (session.user as { tid?: string }).tid,
+    };
+    if (!(await hasAnyMembership(identity))) {
+      membership = await autoProvisionMembership(
+        { ...identity, name: session.user.name, email: session.user.email },
+        requested
+      );
+    }
+  }
   if (!membership) {
     const oid = (session.user as { oid?: string }).oid;
     const tid = (session.user as { tid?: string }).tid;
+    const existing = await hasAnyMembership({ oid, tid });
+    if (existing) {
+      return (
+        <AuthMessage
+          title="Role mismatch"
+          body={`Your account already has a WorkTrack role. Sign in again and select the role you were provisioned with.`}
+          showRetry
+        />
+      );
+    }
     return (
       <AuthMessage
         title="No WorkTrack access"
@@ -43,8 +77,6 @@ async function CompleteContent({
     );
   }
 
-  const store = await cookies();
-  const requested = store.get(LOGIN_ROLE_COOKIE)?.value as WorkTrackRole | undefined;
   // Cookie is left to expire (15 min) — it is overwritten on every sign-in.
 
   if (!requested || requested !== membership.role) {
