@@ -27,6 +27,7 @@ import {
   subscribeToDatabase,
 } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
+import { StatusBadge } from "@/components/worklog/StatusBadge";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { EXERCISE_END, EXERCISE_START } from "@/lib/worklog/seed";
 import { getDaySummary, getTaskById } from "@/lib/worklog/selectors";
@@ -763,8 +764,8 @@ function EmployeeDrawer({
                         <td className="whitespace-nowrap px-3 py-2.5 text-[11px] text-[#53506B]">
                           {WORK_LOCATION_LABELS[item.entry.workLocation]}
                         </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-[11px] text-[#53506B]">
-                          {STATUS_LABELS_SHORT[item.entry.statusAtEntry]}
+                        <td className="px-3 py-2.5">
+                          <StatusBadge status={item.entry.statusAtEntry} label={STATUS_LABELS_SHORT[item.entry.statusAtEntry]} />
                         </td>
                         <td
                           className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-semibold text-[#B45309]"
@@ -895,7 +896,7 @@ function EmployeeDrawer({
                         <p className="truncate text-xs font-semibold text-[#17172F]">{task?.title ?? "Task"}</p>
                         <p className="text-[11px] text-[#777A91]">
                           {e.previousStatus ? `${STATUS_LABELS_SHORT[e.previousStatus]} → ` : ""}
-                          <span className="font-semibold text-[#5A3ED0]">{STATUS_LABELS_SHORT[e.newStatus]}</span>
+                          <StatusBadge status={e.newStatus} label={STATUS_LABELS_SHORT[e.newStatus]} />
                           {e.changeNote ? ` — ${e.changeNote}` : ""}
                         </p>
                       </div>

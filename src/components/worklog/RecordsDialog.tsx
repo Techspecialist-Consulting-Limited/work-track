@@ -5,7 +5,8 @@ import { Check, ChevronLeft, ChevronRight, Coffee, Pencil, Save, Trash2, X } fro
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getTaskById } from "@/lib/worklog/selectors";
-import { dateKeyAfter, STATUS_LABELS } from "./shared";
+import { dateKeyAfter } from "./shared";
+import { StatusBadge } from "./StatusBadge";
 import type { WorkLogController } from "./useWorkLogController";
 
 /* 16px on touch layouts prevents iOS focus zoom; smaller on desktop panels. */
@@ -128,7 +129,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                           </p>
                           <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-4 text-[#53506B]">{item.entry.description}</p>
                           <p className="mt-1.5 text-[11px] text-[#777A91]">
-                            {WORK_LOCATION_LABELS[item.entry.workLocation]} · {STATUS_LABELS[item.entry.statusAtEntry]}
+                            {WORK_LOCATION_LABELS[item.entry.workLocation]} · <StatusBadge status={item.entry.statusAtEntry} />
                             {item.entry.overtimeMinutes > 0 ? ` · Overtime ${formatMinutes(item.entry.overtimeMinutes)}` : ""}
                             {item.entry.isReportedOvertime ? " · Reported overtime" : ""}
                           </p>

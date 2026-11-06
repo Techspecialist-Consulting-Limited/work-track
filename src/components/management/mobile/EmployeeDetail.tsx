@@ -19,6 +19,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
+import { StatusBadge } from "@/components/worklog/StatusBadge";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { getDaySummary, getTaskById, type DaySummary } from "@/lib/worklog/selectors";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime12 } from "@/lib/worklog/time";
@@ -498,10 +499,13 @@ function WorkRow({ db, entry }: { db: WorkLogDatabase; entry: WorkEntry }) {
           {isOvertime ? "Overtime · " : ""}
           {task?.title ?? "Task"}
         </p>
-        <p className="mt-0.5 truncate text-[11px] text-[#9292A8]">
-          {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
-          {isOvertime ? ` · ${formatMinutes(entry.overtimeMinutes)} OT` : ""}
-          {entry.isReportedOvertime ? " · Reported" : ""}
+        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-[#9292A8]">
+          <span className="truncate">
+            {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
+            {isOvertime ? ` · ${formatMinutes(entry.overtimeMinutes)} OT` : ""}
+            {entry.isReportedOvertime ? " · Reported" : ""}
+          </span>
+          <StatusBadge status={entry.statusAtEntry} className="shrink-0" />
         </p>
       </div>
       <span className="shrink-0 text-[12px] font-bold text-[#17172B]">
@@ -586,9 +590,12 @@ function OvertimeTab({
                   <p className="truncate text-[13px] font-semibold text-[#17172B]">
                     Overtime · {task?.title ?? "Task"}
                   </p>
-                  <p className="mt-0.5 truncate text-[11px] text-[#9292A8]">
-                    {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
-                    {entry.isReportedOvertime ? " · Reported" : ""}
+                  <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-[#9292A8]">
+                    <span className="truncate">
+                      {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
+                      {entry.isReportedOvertime ? " · Reported" : ""}
+                    </span>
+                    <StatusBadge status={entry.statusAtEntry} className="shrink-0" />
                   </p>
                 </div>
                 <span className="shrink-0 text-[12px] font-bold text-[#B45309]">

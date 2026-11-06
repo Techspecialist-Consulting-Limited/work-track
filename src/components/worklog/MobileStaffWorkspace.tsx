@@ -16,12 +16,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
+import { WORK_LOCATION_LABELS, WORKLOG_RULES, TASK_STATUS_DOT_CLASSES } from "@/lib/worklog/config";
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getTaskById } from "@/lib/worklog/selectors";
 import type { TaskStatus, WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
+import { StatusBadge } from "./StatusBadge";
 import {
   MOBILE_BASE_INPUT_CLASS,
   MOBILE_INPUT_CLASS,
@@ -61,12 +62,6 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
       vv.removeEventListener("scroll", update);
     };
   }, []);
-
-  useEffect(() => {
-    if (!c.editingId) return;
-    const id = window.setTimeout(() => setAdjustSheetOpen(true), 0);
-    return () => window.clearTimeout(id);
-  }, [c.editingId]);
 
   const filteredSheetTasks = c.openTasks.filter((task) =>
     task.title.toLocaleLowerCase().includes(sheetQuery.trim().toLocaleLowerCase())
@@ -272,8 +267,8 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                       {selectedTaskTitle ?? "Select a task"}
                     </span>
                     {selectedTaskTitle && c.selectedTask ? (
-                      <span className="block text-[10px] font-medium text-[#8B8B9A]">
-                        {STATUS_LABELS[c.selectedTask.currentStatus]}
+                      <span className="mt-0.5 block">
+                        <StatusBadge status={c.selectedTask.currentStatus} />
                       </span>
                     ) : null}
                   </span>
@@ -417,12 +412,13 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                         c.setStatusReason("");
                       }}
                       aria-pressed={selected}
-                      className={`min-h-11 rounded-lg border px-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-not-allowed disabled:opacity-50 ${
+                      className={`flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-not-allowed disabled:opacity-50 ${
                         selected
                           ? "border-[#6C45F5] bg-[#F5F1FF] text-[#4E35C6]"
                           : "border-[#E7E6F0] bg-white text-[#53506B] hover:bg-[#FCFBFF]"
                       }`}
                     >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${TASK_STATUS_DOT_CLASSES[status]}`} aria-hidden="true" />
                       {STATUS_LABELS[status]}
                     </button>
                   );
@@ -607,7 +603,9 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-[#17172F]">{task.title}</span>
-                  <span className="block text-[10px] font-medium text-[#8B8B9A]">{STATUS_LABELS[task.currentStatus]}</span>
+                  <span className="mt-0.5 block">
+                    <StatusBadge status={task.currentStatus} />
+                  </span>
                 </span>
                 {selected ? <Check size={18} className="shrink-0 text-[#6C45F5]" aria-hidden="true" /> : null}
               </button>

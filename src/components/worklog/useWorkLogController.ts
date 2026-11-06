@@ -194,7 +194,7 @@ export function useWorkLogController() {
     setEvidenceLink(entry.evidenceLink ?? "");
     setShowEvidenceLink(Boolean(entry.evidenceLink));
     setIsReportedOvertime(entry.isReportedOvertime);
-    setShowTimeAdjustment(true);
+    setShowTimeAdjustment(false);
     setSlotLocked(true);
     setSelectedSlot("");
     setStatusChoice(entry.statusAtEntry);

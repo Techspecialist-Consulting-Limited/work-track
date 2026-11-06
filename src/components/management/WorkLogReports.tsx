@@ -5,6 +5,7 @@ import { useState, useSyncExternalStore } from "react";
 import { ArrowLeft, Download, SlidersHorizontal, X } from "lucide-react";
 import { getDatabaseSnapshot, getServerSnapshot, getSessionEmployeeId, getSessionRole, getSessionUser, subscribeToDatabase } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
+import { StatusBadge } from "@/components/worklog/StatusBadge";
 import { BottomSheet } from "@/components/management/mobile/shared";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { filterEntries, type RangeFilter } from "@/lib/worklog/selectors";
@@ -217,7 +218,7 @@ export function WorkLogReports() {
                     <td className="px-4 py-3">{task?.title ?? "—"}</td>
                     <td className="px-4 py-3">{formatTime(e.startAt)}–{formatTime(e.endAt)}</td>
                     <td className="px-4 py-3">{WORK_LOCATION_LABELS[e.workLocation]}</td>
-                    <td className="px-4 py-3">{TASK_STATUS_LABELS[e.statusAtEntry]}</td>
+                    <td className="px-4 py-3"><StatusBadge status={e.statusAtEntry} /></td>
                     <td className="px-4 py-3">{formatMinutes(durationMinutes(e.startAt, e.endAt))}</td>
                     <td className="px-4 py-3">{e.overtimeMinutes > 0 ? formatMinutes(e.overtimeMinutes) : "—"}</td>
                   </tr>
