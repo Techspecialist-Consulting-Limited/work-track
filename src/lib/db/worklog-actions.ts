@@ -218,6 +218,39 @@ export async function editWorkEntryAction(
   return { ok: true };
 }
 
+/** Staff void their own work entry so the slot frees up and they can re-enter. */
+export async function voidWorkEntryAction(
+  membership: WorkTrackMembership,
+  entryId: string
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  const entry = (
+    await db
+      .select()
+      .from(timeEntries)
+      .where(
+        and(
+          eq(timeEntries.id, entryId),
+          eq(timeEntries.employeeId, employeeId),
+          eq(timeEntries.entryType, "work"),
+          isNull(timeEntries.voidedAt)
+        )
+      )
+      .limit(1)
+  )[0];
+  if (!entry) return { ok: false, message: "This entry no longer exists." };
+
+  await db
+    .update(timeEntries)
+    .set({ voidedAt: new Date(), voidReason: "Deleted by staff", updatedAt: new Date() })
+    .where(eq(timeEntries.id, entryId));
+  await audit(membership, "entry.void", "time_entry", entryId, null, {
+    startAt: entry.startAt.toISOString(),
+    endAt: entry.endAt?.toISOString() ?? null,
+  });
+  return { ok: true };
+}
+
 export async function createTaskAction(
   membership: WorkTrackMembership,
   input: { employeeId: string; title: string; id: string }

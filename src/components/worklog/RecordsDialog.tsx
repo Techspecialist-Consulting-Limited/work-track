@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Coffee, Pencil, Save, X } from "lucide-react";
+import { useState } from "react";
+import { Check, ChevronLeft, ChevronRight, Coffee, Pencil, Save, Trash2, X } from "lucide-react";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getTaskById } from "@/lib/worklog/selectors";
@@ -12,6 +13,7 @@ const DIALOG_INPUT_CLASS =
   "mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-2.5 py-2 text-base text-[#17172F] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15 lg:min-h-9 lg:text-[13px]";
 
 export function RecordsDialog({ c }: { c: WorkLogController }) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   if (!c.recordsOpen) return null;
   const { recordsSummary, recordsDateKey, todayKey, timeline, taskStatusCounts } = c;
 
@@ -131,14 +133,48 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                             {item.entry.isReportedOvertime ? " · Reported overtime" : ""}
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          aria-label={`Edit ${getTaskById(c.db, item.entry.taskId)?.title ?? "work entry"}`}
-                          onClick={() => c.beginEdit(item.entry)}
-                          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#777A91] hover:bg-[#F5F1FF] hover:text-[#5A3ED0]"
-                        >
-                          <Pencil size={15} aria-hidden="true" />
-                        </button>
+                        {confirmDeleteId === item.entry.id ? (
+                          <span className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label="Confirm delete entry"
+                              onClick={() => {
+                                c.deleteEntry(item.entry.id);
+                                setConfirmDeleteId(null);
+                              }}
+                              className="grid h-9 w-9 place-items-center rounded-lg bg-[#B42318] text-white transition hover:bg-[#912018] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318]"
+                            >
+                              <Check size={15} aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="Cancel delete"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="grid h-9 w-9 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#F7F7FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                            >
+                              <X size={15} aria-hidden="true" />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="flex shrink-0 items-center gap-0.5">
+                            <button
+                              type="button"
+                              aria-label={`Edit ${getTaskById(c.db, item.entry.taskId)?.title ?? "work entry"}`}
+                              onClick={() => c.beginEdit(item.entry)}
+                              className="grid h-9 w-9 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#F5F1FF] hover:text-[#5A3ED0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                            >
+                              <Pencil size={15} aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete ${getTaskById(c.db, item.entry.taskId)?.title ?? "work entry"}`}
+                              onClick={() => setConfirmDeleteId(item.entry.id)}
+                              className="grid h-9 w-9 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#FDECEC] hover:text-[#B42318] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318]"
+                            >
+                              <Trash2 size={15} aria-hidden="true" />
+                            </button>
+                          </span>
+                        )}
                       </div>
                     </li>
                   ) : (

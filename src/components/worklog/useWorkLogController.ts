@@ -6,6 +6,7 @@ import { TASK_STATUS_LABELS } from "@/lib/worklog/config";
 import {
   addWorkEntry,
   createTask,
+  deleteWorkEntry,
   editWorkEntry,
   endBreak,
   getDatabaseSnapshot,
@@ -286,6 +287,16 @@ export function useWorkLogController() {
     resetForm();
   }
 
+  function deleteEntry(entryId: string) {
+    const result = deleteWorkEntry(entryId);
+    if (!result.ok) setError(result.message);
+    else {
+      setError(null);
+      setNotice("Work entry deleted.");
+      setRecordsOpen(false);
+    }
+  }
+
   function handleStartBreak() {
     const result = startBreak(meId);
     if (!result.ok) setError(result.message);
@@ -421,6 +432,7 @@ export function useWorkLogController() {
     effectiveTaskMode,
     resetForm,
     beginEdit,
+    deleteEntry,
     selectTaskMode,
     selectSlot,
     submitEntry,

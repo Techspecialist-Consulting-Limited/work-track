@@ -421,6 +421,17 @@ export function startBreak(employeeId: EmployeeId): MutationResult & { adjustedE
   return { ok: true, adjustedEntry };
 }
 
+/** Voids the staff member's own work entry (soft delete — frees the slot). */
+export function deleteWorkEntry(entryId: string): MutationResult {
+  const db = getDatabaseSnapshot();
+  if (!db.entries.some((e) => e.id === entryId)) {
+    return { ok: false, message: "This entry no longer exists." };
+  }
+  emit({ ...db, entries: db.entries.filter((e) => e.id !== entryId) });
+  void syncAction("voidEntry", { entryId });
+  return { ok: true };
+}
+
 export function endBreak(breakId: string): MutationResult {
   const db = getDatabaseSnapshot();
   const brk = db.breaks.find((b) => b.id === breakId);

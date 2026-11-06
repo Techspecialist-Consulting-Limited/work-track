@@ -12,6 +12,7 @@ import {
   startBreakAction,
   updateProfileAction,
   updateTaskStatusAction,
+  voidWorkEntryAction,
   type ActionResult,
 } from "@/lib/db/worklog-actions";
 
@@ -68,6 +69,9 @@ export async function POST(request: Request) {
         break;
       case "inviteChairman":
         result = await inviteChairmanAction(membership, p as never);
+        break;
+      case "voidEntry":
+        result = await voidWorkEntryAction(membership, String(p.entryId));
         break;
       default:
         return NextResponse.json({ ok: false, message: "Unknown action." }, { status: 400 });
