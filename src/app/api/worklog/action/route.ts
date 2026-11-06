@@ -30,7 +30,10 @@ export async function POST(request: Request) {
 
     switch (body.action) {
       case "addEntry":
-        result = await addWorkEntryAction(membership, p as never);
+        result = await addWorkEntryAction(membership, {
+          id: String(p.id),
+          ...(p.input as Record<string, unknown>),
+        } as never);
         break;
       case "editEntry":
         result = await editWorkEntryAction(membership, String(p.entryId), p.input as never);
