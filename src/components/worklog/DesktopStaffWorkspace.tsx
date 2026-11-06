@@ -224,6 +224,88 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
           </section>
 
           <div className="space-y-1">
+            <div className={`grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] items-end gap-4 ${activeBreak ? "hidden" : ""}`}>
+              <section aria-labelledby="task-heading">
+                <h2 id="task-heading" className="mb-1 text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
+                  Task
+                </h2>
+                <div className="mb-1.5 grid w-full grid-cols-2 rounded-lg bg-[#F4F3F8] p-0.5">
+                  <button
+                    type="button"
+                    aria-label="Continue existing task"
+                    aria-pressed={effectiveTaskMode === "continue"}
+                    onClick={() => selectTaskMode("continue")}
+                    className={`min-h-[38px] whitespace-nowrap rounded-md px-1 text-[10px] font-semibold transition sm:text-xs ${
+                      effectiveTaskMode === "continue" ? "bg-white text-[#4E35C6] shadow-sm" : "text-[#777A91] hover:text-[#39364F]"
+                    }`}
+                  >
+                    Continue existing task
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Start a new task"
+                    aria-pressed={effectiveTaskMode === "new"}
+                    onClick={() => selectTaskMode("new")}
+                    className={`min-h-[38px] whitespace-nowrap rounded-md px-1 text-[10px] font-semibold transition sm:text-xs ${
+                      effectiveTaskMode === "new" ? "bg-white text-[#4E35C6] shadow-sm" : "text-[#777A91] hover:text-[#39364F]"
+                    }`}
+                  >
+                    Start new task
+                  </button>
+                </div>
+                {effectiveTaskMode === "continue" ? (
+                  <div className="grid grid-cols-2 items-end gap-2">
+                    <input
+                      value={taskSearch}
+                      onChange={(event) => setTaskSearch(event.target.value)}
+                      aria-label="Search ongoing or blocked tasks"
+                      placeholder="Search tasks..."
+                      className={BASE_INPUT_CLASS}
+                      disabled={Boolean(editingId)}
+                    />
+                    <WorkTrackSelect
+                      label="Choose a task"
+                      value={taskChoice}
+                      placeholder="Select a task"
+                      disabled={Boolean(editingId)}
+                      onChange={(value) => {
+                        if (value === NEW_TASK) selectTaskMode("new");
+                        else {
+                          setTaskChoice(value);
+                          const task = getTaskById(db, value);
+                          setStatusChoice(task && task.currentStatus !== "not_started" ? task.currentStatus : "ongoing");
+                        }
+                      }}
+                      options={taskOptions}
+                    />
+                  </div>
+                ) : (
+                  <label className="block text-xs font-semibold text-[#53506B]">
+                    Task title
+                    <input
+                      value={newTaskTitle}
+                      maxLength={WORKLOG_RULES.taskTitleMaxLength}
+                      onChange={(event) => setNewTaskTitle(event.target.value)}
+                      placeholder="Give this task a clear name"
+                      className={INPUT_CLASS}
+                    />
+                  </label>
+                )}
+              </section>
+
+              <label className="block text-xs font-semibold text-[#53506B]">
+                What did you do during this time?
+                <textarea
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  rows={3}
+                  maxLength={WORKLOG_RULES.descriptionMaxLength}
+                  placeholder="Briefly describe what you worked on during this period..."
+                  className={`${INPUT_CLASS} min-h-[76px] resize-y`}
+                />
+              </label>
+            </div>
+
             <section aria-labelledby="time-slots-heading" className={`relative ${activeBreak ? "hidden" : ""}`}>
               <div className="relative mb-1 flex items-center justify-between gap-2">
                 <h2 id="time-slots-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
@@ -321,88 +403,6 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                 </div>
               ) : null}
             </section>
-
-            <div className={`grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] items-end gap-4 ${activeBreak ? "hidden" : ""}`}>
-              <section aria-labelledby="task-heading">
-                <h2 id="task-heading" className="mb-1 text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
-                  Task
-                </h2>
-                <div className="mb-1.5 grid w-full grid-cols-2 rounded-lg bg-[#F4F3F8] p-0.5">
-                  <button
-                    type="button"
-                    aria-label="Continue existing task"
-                    aria-pressed={effectiveTaskMode === "continue"}
-                    onClick={() => selectTaskMode("continue")}
-                    className={`min-h-[38px] whitespace-nowrap rounded-md px-1 text-[10px] font-semibold transition sm:text-xs ${
-                      effectiveTaskMode === "continue" ? "bg-white text-[#4E35C6] shadow-sm" : "text-[#777A91] hover:text-[#39364F]"
-                    }`}
-                  >
-                    Continue existing task
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Start a new task"
-                    aria-pressed={effectiveTaskMode === "new"}
-                    onClick={() => selectTaskMode("new")}
-                    className={`min-h-[38px] whitespace-nowrap rounded-md px-1 text-[10px] font-semibold transition sm:text-xs ${
-                      effectiveTaskMode === "new" ? "bg-white text-[#4E35C6] shadow-sm" : "text-[#777A91] hover:text-[#39364F]"
-                    }`}
-                  >
-                    Start new task
-                  </button>
-                </div>
-                {effectiveTaskMode === "continue" ? (
-                  <div className="grid grid-cols-2 items-end gap-2">
-                    <input
-                      value={taskSearch}
-                      onChange={(event) => setTaskSearch(event.target.value)}
-                      aria-label="Search ongoing or blocked tasks"
-                      placeholder="Search tasks..."
-                      className={BASE_INPUT_CLASS}
-                      disabled={Boolean(editingId)}
-                    />
-                    <WorkTrackSelect
-                      label="Choose a task"
-                      value={taskChoice}
-                      placeholder="Select a task"
-                      disabled={Boolean(editingId)}
-                      onChange={(value) => {
-                        if (value === NEW_TASK) selectTaskMode("new");
-                        else {
-                          setTaskChoice(value);
-                          const task = getTaskById(db, value);
-                          setStatusChoice(task && task.currentStatus !== "not_started" ? task.currentStatus : "ongoing");
-                        }
-                      }}
-                      options={taskOptions}
-                    />
-                  </div>
-                ) : (
-                  <label className="block text-xs font-semibold text-[#53506B]">
-                    Task title
-                    <input
-                      value={newTaskTitle}
-                      maxLength={WORKLOG_RULES.taskTitleMaxLength}
-                      onChange={(event) => setNewTaskTitle(event.target.value)}
-                      placeholder="Give this task a clear name"
-                      className={INPUT_CLASS}
-                    />
-                  </label>
-                )}
-              </section>
-
-              <label className="block text-xs font-semibold text-[#53506B]">
-                What did you do during this time?
-                <textarea
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  rows={3}
-                  maxLength={WORKLOG_RULES.descriptionMaxLength}
-                  placeholder="Briefly describe what you worked on during this period..."
-                  className={`${INPUT_CLASS} min-h-[76px] resize-y`}
-                />
-              </label>
-            </div>
 
             <div className={`grid grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] items-start gap-4 ${activeBreak ? "hidden " : ""}`}>
               <fieldset className="min-w-0">
