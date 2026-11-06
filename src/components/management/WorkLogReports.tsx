@@ -115,7 +115,7 @@ export function WorkLogReports() {
       <div className="mx-auto max-w-6xl">
         <Link
           href="/executive"
-          className="mb-4 inline-flex min-h-10 items-center gap-1.5 rounded-full bg-[#B42318] px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#912018] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318] focus-visible:ring-offset-2 lg:hidden"
+          className="mb-4 inline-flex min-h-10 items-center gap-1.5 rounded-full bg-[#B42318] px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#912018] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318] focus-visible:ring-offset-2"
         >
           <ArrowLeft size={15} aria-hidden="true" />
           Team Board
