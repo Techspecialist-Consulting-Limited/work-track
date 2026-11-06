@@ -19,6 +19,15 @@ import type {
 
 type Listener = () => void;
 
+/** Chains follow-up syncs (e.g. addEntry) behind a just-created task's insert. */
+const pendingSyncs = new Map<string, Promise<unknown>>();
+
+function queueAfter(taskId: string | undefined, send: () => void) {
+  const prior = taskId ? pendingSyncs.get(taskId) : undefined;
+  if (prior) void prior.then(send);
+  else send();
+}
+
 const EMPTY_DB: WorkLogDatabase = { version: 1, employees: [], tasks: [], entries: [], breaks: [] };
 
 const listeners = new Set<Listener>();
@@ -254,7 +263,7 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     entries: [...db.entries, entry],
     tasks: updatedTask === task ? db.tasks : db.tasks.map((item) => item.id === task.id ? updatedTask : item),
   });
-  void syncAction("addEntry", { id, input });
+  queueAfter(input.taskId, () => void syncAction("addEntry", { id, input }));
   return { ok: true };
 }
 
@@ -289,7 +298,7 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
     ],
   };
   emit({ ...db, entries: db.entries.map((e) => (e.id === entryId ? updated : e)) });
-  void syncAction("editEntry", { entryId, input });
+  queueAfter(existing.taskId, () => void syncAction("editEntry", { entryId, input }));
   return { ok: true };
 }
 
@@ -316,7 +325,9 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
       },
     ],
   });
-  void syncAction("createTask", { ...input, id: taskId });
+  const sync = syncAction("createTask", { ...input, id: taskId });
+  pendingSyncs.set(taskId, sync);
+  void sync.finally(() => pendingSyncs.delete(taskId));
   return { ok: true, taskId };
 }
 
