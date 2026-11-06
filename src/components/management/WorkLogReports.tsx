@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useState, useSyncExternalStore } from "react";
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, Download, SlidersHorizontal, X } from "lucide-react";
 import { getDatabaseSnapshot, getServerSnapshot, getSessionEmployeeId, getSessionRole, getSessionUser, subscribeToDatabase } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
+import { BottomSheet } from "@/components/management/mobile/shared";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { filterEntries, type RangeFilter } from "@/lib/worklog/selectors";
 import { TASK_STATUS_LABELS, WORK_LOCATION_LABELS } from "@/lib/worklog/config";
@@ -12,26 +13,46 @@ import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime 
 import { getZonedDateKey } from "@/lib/worktrack/schedule-config";
 import type { TaskStatus, WorkLocation } from "@/lib/worklog/types";
 
-const selectClass = "h-9 rounded-lg border border-[#E2E2EE] bg-white px-3 text-[13px]";
+const selectClass = "h-11 w-full rounded-xl border border-[#E2E2EE] bg-white px-3 text-base text-[#17172B] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/25 lg:h-9 lg:text-[13px]";
+
+function defaultFilter(): RangeFilter {
+  return {
+    fromKey: "2026-10-26",
+    toKey: getZonedDateKey(new Date()),
+    employeeId: "all",
+    location: "all",
+    statusAtEntry: "all",
+    hours: "all",
+  };
+}
 
 export function WorkLogReports() {
   const db = useSyncExternalStore(subscribeToDatabase, getDatabaseSnapshot, getServerSnapshot);
   const meEmployee = db.employees.find((e) => e.id === getSessionEmployeeId());
   const canEditProfile = Boolean(meEmployee) && getSessionRole() !== "chairman";
-  const today = getZonedDateKey(new Date());
-  const [filter, setFilter] = useState<RangeFilter>({
-    fromKey: "2026-10-26",
-    toKey: today,
-    employeeId: "all",
-    location: "all",
-    statusAtEntry: "all",
-    hours: "all",
-  });
+  const [defaults] = useState(defaultFilter);
+  const [filter, setFilter] = useState<RangeFilter>(defaults);
+  const [draft, setDraft] = useState<RangeFilter>(defaults);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const update = (patch: Partial<RangeFilter>) => setFilter((f) => ({ ...f, ...patch }));
+  const updateDraft = (patch: Partial<RangeFilter>) => setDraft((f) => ({ ...f, ...patch }));
   const entries = filterEntries(db, filter);
   const totalMinutes = entries.reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
+
+  const openSheet = () => {
+    setDraft(filter);
+    setSheetOpen(true);
+  };
+  const applyDraft = () => {
+    setFilter(draft);
+    setSheetOpen(false);
+  };
+  const resetFilters = () => {
+    setDraft(defaults);
+    setFilter(defaults);
+  };
 
   const onExport = async () => {
     setExporting(true);
@@ -41,6 +62,53 @@ export function WorkLogReports() {
       setExporting(false);
     }
   };
+
+  // Active-filter bookkeeping for the badge and removable chips.
+  const datesActive = filter.fromKey !== defaults.fromKey || filter.toKey !== defaults.toKey;
+  const activeCount =
+    (datesActive ? 1 : 0) +
+    (filter.employeeId !== "all" ? 1 : 0) +
+    (filter.location !== "all" ? 1 : 0) +
+    (filter.statusAtEntry !== "all" ? 1 : 0) +
+    (filter.hours !== "all" ? 1 : 0);
+
+  const chips: { key: string; label: string; clear: () => void }[] = [];
+  if (datesActive) {
+    chips.push({
+      key: "dates",
+      label: `${formatDateLabel(filter.fromKey)} → ${formatDateLabel(filter.toKey)}`,
+      clear: () => update({ fromKey: defaults.fromKey, toKey: defaults.toKey }),
+    });
+  }
+  if (filter.employeeId !== "all") {
+    const emp = db.employees.find((e) => e.id === filter.employeeId);
+    chips.push({
+      key: "employee",
+      label: emp?.name ?? "Employee",
+      clear: () => update({ employeeId: "all" }),
+    });
+  }
+  if (filter.location !== "all") {
+    chips.push({
+      key: "location",
+      label: WORK_LOCATION_LABELS[filter.location as WorkLocation],
+      clear: () => update({ location: "all" }),
+    });
+  }
+  if (filter.statusAtEntry !== "all") {
+    chips.push({
+      key: "status",
+      label: TASK_STATUS_LABELS[filter.statusAtEntry as TaskStatus],
+      clear: () => update({ statusAtEntry: "all" }),
+    });
+  }
+  if (filter.hours !== "all") {
+    chips.push({
+      key: "hours",
+      label: filter.hours === "normal" ? "Normal hours" : "Overtime",
+      clear: () => update({ hours: "all" }),
+    });
+  }
 
   return (
     <main className="min-h-dvh bg-[#F7F7FC] px-4 py-8 text-wt-ink md:px-8">
@@ -78,43 +146,53 @@ export function WorkLogReports() {
           </div>
         </header>
 
-        <section className="mb-6 grid gap-3 rounded-2xl border border-[#E2E2EE] bg-white p-4 md:grid-cols-3 lg:grid-cols-6">
-          <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">From
-            <input type="date" value={filter.fromKey} onChange={(e) => e.target.value && update({ fromKey: e.target.value })} className={selectClass} />
-          </label>
-          <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">To
-            <input type="date" value={filter.toKey} onChange={(e) => e.target.value && update({ toKey: e.target.value })} className={selectClass} />
-          </label>
-          <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Employee
-            <select value={filter.employeeId} onChange={(e) => update({ employeeId: e.target.value })} className={selectClass}>
-              <option value="all">All employees</option>
-              {db.employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Location
-            <select value={filter.location} onChange={(e) => update({ location: e.target.value as WorkLocation | "all" })} className={selectClass}>
-              <option value="all">All</option>
-              <option value="office">{WORK_LOCATION_LABELS.office}</option>
-              <option value="home">{WORK_LOCATION_LABELS.home}</option>
-              <option value="other">{WORK_LOCATION_LABELS.other}</option>
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Task status at entry
-            <select value={filter.statusAtEntry} onChange={(e) => update({ statusAtEntry: e.target.value as TaskStatus | "all" })} className={selectClass}>
-              <option value="all">All</option>
-              {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Hours
-            <select value={filter.hours} onChange={(e) => update({ hours: e.target.value as RangeFilter["hours"] })} className={selectClass}>
-              <option value="all">All</option>
-              <option value="normal">Normal hours only</option>
-              <option value="overtime">Overtime only</option>
-            </select>
-          </label>
-        </section>
+        {/* Toolbar: result summary + compact filter control (mobile/tablet) */}
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="text-[13px] text-[#737A96]">{entries.length} entries · {formatMinutes(totalMinutes)} logged</p>
+          <button
+            type="button"
+            onClick={openSheet}
+            className="relative inline-flex min-h-10 items-center gap-1.5 rounded-full border border-[#E2E2EE] bg-white px-3.5 text-[13px] font-semibold text-[#4A4665] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] lg:hidden"
+          >
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            Filters
+            {activeCount > 0 ? (
+              <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#6C45F5] px-1 text-[10px] font-bold text-white">
+                {activeCount}
+              </span>
+            ) : null}
+          </button>
+        </div>
 
-        <p className="mb-3 text-[13px] text-[#737A96]">{entries.length} entries · {formatMinutes(totalMinutes)} logged</p>
+        {/* Active filter chips — removable without reopening the sheet */}
+        {chips.length > 0 ? (
+          <div className="mb-4 flex flex-wrap gap-2">
+            {chips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={chip.clear}
+                aria-label={`Remove filter: ${chip.label}`}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[#D8D0F5] bg-[#F5F1FF] px-3 text-[11px] font-semibold text-[#4F31D0] transition hover:bg-[#EFE9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+              >
+                {chip.label}
+                <X size={12} aria-hidden="true" />
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="inline-flex min-h-8 items-center rounded-full px-2 text-[11px] font-semibold text-[#8B8B9A] underline-offset-2 transition hover:text-[#B42318] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+            >
+              Reset all
+            </button>
+          </div>
+        ) : null}
+
+        {/* Desktop: compact inline filter panel */}
+        <section className="mb-6 hidden rounded-2xl border border-[#E2E2EE] bg-white p-4 lg:grid lg:grid-cols-6">
+          <FilterFields value={filter} onChange={update} employees={db.employees} />
+        </section>
 
         <div className="overflow-x-auto rounded-2xl border border-[#E2E2EE] bg-white">
           <table className="w-full text-left text-[13px]">
@@ -154,6 +232,77 @@ export function WorkLogReports() {
           </table>
         </div>
       </div>
+
+      {/* Mobile filter sheet */}
+      <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Filters">
+        <div className="grid max-h-[60dvh] gap-3 overflow-y-auto overscroll-contain">
+          <FilterFields value={draft} onChange={updateDraft} employees={db.employees} />
+        </div>
+        <div className="mt-4 flex gap-2 border-t border-[#EEEAF2] pt-4">
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="min-h-11 flex-1 rounded-xl border border-[#E2E2EE] px-4 text-sm font-semibold text-[#4A4665] transition hover:bg-[#F7F6FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+          >
+            Reset
+          </button>
+          <button
+            type="button"
+            onClick={applyDraft}
+            className="min-h-11 flex-1 rounded-xl bg-[#6C45F5] px-4 text-sm font-bold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] focus-visible:ring-offset-2"
+          >
+            Apply Filters
+          </button>
+        </div>
+      </BottomSheet>
     </main>
+  );
+}
+
+function FilterFields({
+  value,
+  onChange,
+  employees,
+}: {
+  value: RangeFilter;
+  onChange: (patch: Partial<RangeFilter>) => void;
+  employees?: { id: string; name: string }[];
+}) {
+  return (
+    <>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96] lg:col-span-1">From
+        <input type="date" value={value.fromKey} onChange={(e) => e.target.value && onChange({ fromKey: e.target.value })} className={selectClass} />
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">To
+        <input type="date" value={value.toKey} onChange={(e) => e.target.value && onChange({ toKey: e.target.value })} className={selectClass} />
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Employee
+        <select value={value.employeeId} onChange={(e) => onChange({ employeeId: e.target.value })} className={selectClass}>
+          <option value="all">All employees</option>
+          {(employees ?? []).map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Location
+        <select value={value.location} onChange={(e) => onChange({ location: e.target.value as WorkLocation | "all" })} className={selectClass}>
+          <option value="all">All</option>
+          <option value="office">{WORK_LOCATION_LABELS.office}</option>
+          <option value="home">{WORK_LOCATION_LABELS.home}</option>
+          <option value="other">{WORK_LOCATION_LABELS.other}</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Task status at entry
+        <select value={value.statusAtEntry} onChange={(e) => onChange({ statusAtEntry: e.target.value as TaskStatus | "all" })} className={selectClass}>
+          <option value="all">All</option>
+          {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Hours
+        <select value={value.hours} onChange={(e) => onChange({ hours: e.target.value as RangeFilter["hours"] })} className={selectClass}>
+          <option value="all">All</option>
+          <option value="normal">Normal hours only</option>
+          <option value="overtime">Overtime only</option>
+        </select>
+      </label>
+    </>
   );
 }
