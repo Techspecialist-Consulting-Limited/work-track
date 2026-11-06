@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { UserPlus, X } from "lucide-react";
 import { inviteChairman } from "@/lib/worklog/repository";
 
@@ -61,19 +62,20 @@ export function InviteChairman({ compact = false }: { compact?: boolean }) {
         Invite Chairman
       </button>
 
-      {open ? (
-        <div
-          className="fixed inset-0 z-[70] flex items-end justify-center bg-[#17172B]/40 p-0 sm:items-center sm:p-6"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Invite chairman"
-            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-6"
-          >
+      {open
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[70] flex items-end justify-center bg-[#17172B]/40 p-0 sm:items-center sm:p-6"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setOpen(false);
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Invite chairman"
+                className="max-h-[85dvh] w-full max-w-sm overflow-y-auto rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-6"
+              >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-bold text-[#17172B]">Invite Chairman</h2>
@@ -136,9 +138,11 @@ export function InviteChairman({ compact = false }: { compact?: boolean }) {
                 {busy ? "Sending…" : "Send invite"}
               </button>
             </div>
-          </div>
-        </div>
-      ) : null}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </>
   );
 }
