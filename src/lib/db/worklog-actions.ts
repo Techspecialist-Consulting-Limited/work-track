@@ -4,7 +4,8 @@ import { db } from "./index";
 import { auditEvents, employees, invitations, tasks, taskStatusHistory, timeEntries } from "./schema";
 import { loadWorkLogDb } from "./worklog-data";
 import type { WorkTrackMembership } from "@/lib/auth/authorize";
-import { validateReason } from "@/lib/worklog/validation";
+import { validateDescription, validateReason } from "@/lib/worklog/validation";
+import { WORKLOG_RULES } from "@/lib/worklog/config";
 import { splitIntervalMinutes } from "@/lib/worklog/time";
 import type { TaskStatus, WorkLogDatabase } from "@/lib/worklog/types";
 
@@ -78,6 +79,8 @@ export async function addWorkEntryAction(
 ): Promise<ActionResult> {
   const employeeId = staffEmployeeId(membership);
   if (input.employeeId !== employeeId) return { ok: false, message: "You can only log your own work." };
+  const desc = validateDescription(input.description);
+  if (!desc.ok) return desc;
 
   const task = (
     await db.select().from(tasks).where(and(eq(tasks.id, input.taskId), eq(tasks.employeeId, employeeId))).limit(1)
@@ -162,6 +165,8 @@ export async function editWorkEntryAction(
 ): Promise<ActionResult> {
   const employeeId = staffEmployeeId(membership);
   if (input.employeeId !== employeeId) return { ok: false, message: "You can only edit your own work." };
+  const desc = validateDescription(input.description);
+  if (!desc.ok) return desc;
 
   const existing = (
     await db
@@ -171,6 +176,11 @@ export async function editWorkEntryAction(
       .limit(1)
   )[0];
   if (!existing) return { ok: false, message: "This entry no longer exists." };
+
+  const task = (
+    await db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.id, input.taskId), eq(tasks.employeeId, employeeId))).limit(1)
+  )[0];
+  if (!task) return { ok: false, message: "Choose a task that belongs to you." };
 
   const split = splitFor(input);
   try {
@@ -216,6 +226,9 @@ export async function createTaskAction(
   if (input.employeeId !== employeeId) return { ok: false, message: "You can only create your own tasks." };
   const title = input.title.trim();
   if (!title) return { ok: false, message: "Give the task a short title." };
+  if (title.length > WORKLOG_RULES.taskTitleMaxLength) {
+    return { ok: false, message: `Keep the task title under ${WORKLOG_RULES.taskTitleMaxLength} characters.` };
+  }
   await db.insert(tasks).values({
     id: input.id,
     employeeId,
