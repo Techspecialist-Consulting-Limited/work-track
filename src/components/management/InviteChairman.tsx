@@ -65,7 +65,7 @@ export function InviteChairman({ compact = false }: { compact?: boolean }) {
       {open
         ? createPortal(
             <div
-              className="fixed inset-0 z-[70] flex items-end justify-center bg-[#17172B]/40 p-0 sm:items-center sm:p-6"
+              className="fixed inset-0 z-[70] flex items-center justify-center bg-[#17172B]/40 p-4"
               onMouseDown={(e) => {
                 if (e.target === e.currentTarget) setOpen(false);
               }}
@@ -74,7 +74,7 @@ export function InviteChairman({ compact = false }: { compact?: boolean }) {
                 role="dialog"
                 aria-modal="true"
                 aria-label="Invite chairman"
-                className="max-h-[85dvh] w-full max-w-sm overflow-y-auto rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:rounded-3xl sm:p-6"
+                className="max-h-[85dvh] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl sm:p-6"
               >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
