@@ -651,9 +651,9 @@ function EmployeeDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`${employee.name} work details`}
-        className="flex h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:max-w-[520px] sm:rounded-l-2xl"
+        className="flex h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:w-[70vw] sm:max-w-[720px] sm:rounded-l-2xl lg:w-[62vw] lg:max-w-[1000px]"
       >
-        <header className="flex shrink-0 items-center gap-3 border-b border-[#EEEAF2] px-4 py-3.5 sm:px-5">
+        <header className="flex shrink-0 items-center gap-3 border-b border-[#EEEAF2] px-4 py-3 sm:px-6">
           <Avatar name={employee.name} avatarUrl={employee.avatarUrl} size={40} />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-base font-bold text-[#17172F]">{employee.name}</h2>
@@ -671,7 +671,7 @@ function EmployeeDrawer({
           </button>
         </header>
 
-        <div className="flex shrink-0 items-center justify-between gap-1.5 border-b border-[#F0EEF5] px-3 py-2.5 sm:px-4">
+        <div className="flex shrink-0 items-center justify-between gap-1.5 border-b border-[#F0EEF5] px-3 py-2 sm:px-5">
           <button
             type="button"
             aria-label="Previous day"
@@ -701,8 +701,8 @@ function EmployeeDrawer({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
-          <p className="mb-3 text-xs font-semibold text-[#39364F]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 sm:px-6">
+          <p className="mb-2 text-xs font-semibold text-[#39364F]">
             {day.entries.length} work {day.entries.length === 1 ? "entry" : "entries"}
             {day.overtimeMinutes > 0 ? ` · ${formatMinutes(day.overtimeMinutes)} overtime` : ""}
           </p>
@@ -714,7 +714,7 @@ function EmployeeDrawer({
             </p>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-[#E7E6F0]">
-              <table className="w-full min-w-[640px] border-collapse text-left">
+              <table className="w-full border-collapse text-left">
                 <thead>
                   <tr className="bg-[#F7F7FC] text-[10px] font-semibold uppercase tracking-wide text-[#8B8B9A]">
                     <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Time</th>
@@ -739,10 +739,10 @@ function EmployeeDrawer({
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-[11px] font-semibold text-[#5A3ED0]">Work</td>
-                        <td className="px-3 py-2.5 text-xs font-semibold text-[#17172F]">
-                          {getTaskById(db, item.entry.taskId)?.title ?? "Task"}
+                        <td className="max-w-[220px] px-3 py-2.5 text-xs font-semibold text-[#17172F]">
+                          <span className="break-words">{getTaskById(db, item.entry.taskId)?.title ?? "Task"}</span>
                         </td>
-                        <td className="max-w-[200px] px-3 py-2.5 text-xs leading-5 text-[#53506B]">
+                        <td className="max-w-[300px] px-3 py-2.5 text-xs leading-5 text-[#53506B]">
                           <span className="whitespace-pre-wrap break-words">{item.entry.description}</span>
                           {item.entry.evidenceLink ? (
                             <a
@@ -794,7 +794,7 @@ function EmployeeDrawer({
             </div>
           )}
 
-          <dl className="mb-4 mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <dl className="mb-3 mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
             <DrawerStat label="Work time" value={formatMinutes(day.workMinutes)} />
             <DrawerStat label="Break time" value={formatMinutes(day.breakMinutes)} />
             <DrawerStat label="Overtime" value={formatMinutes(day.overtimeMinutes)} />
@@ -807,7 +807,7 @@ function EmployeeDrawer({
             <DrawerStat label="Tasks dropped" value={String(taskCounts.dropped)} />
           </dl>
 
-          <section className="mt-5 border-t border-[#EEEAF2] pt-4">
+          <section className="mt-4 border-t border-[#EEEAF2] pt-3">
             <h3 className="mb-2 text-[13px] font-semibold text-[#39364F]">Completed tasks</h3>
             {completedTasks.length === 0 ? (
               <p className="text-[13px] text-[#777A91]">No completed tasks.</p>
@@ -879,7 +879,7 @@ function EmployeeDrawer({
           </section>
         </div>
 
-        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[#EEEAF2] px-4 py-3 sm:px-5">
+        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[#EEEAF2] px-4 py-2.5 sm:px-6">
           <p className="text-[11px] text-[#8B8B9A]">Reviewing {formatDateLabel(viewDate)}</p>
           <button
             type="button"
