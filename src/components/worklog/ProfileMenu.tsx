@@ -87,6 +87,7 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
   const [saving, setSaving] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const isRequired = required && !photo;
@@ -98,6 +99,12 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [showDialog, isRequired]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -127,6 +134,7 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
       return;
     }
     setOpen(false);
+    setToast("Profile updated.");
     router.refresh();
   }
 
@@ -288,6 +296,15 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {toast ? (
+        <div
+          role="status"
+          className="fixed bottom-24 left-1/2 z-[80] -translate-x-1/2 rounded-xl bg-[#17172F] px-4 py-3 text-sm font-medium text-white shadow-xl lg:bottom-5"
+        >
+          {toast}
         </div>
       ) : null}
     </>
