@@ -114,7 +114,6 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               My Records
             </button>
             <ProfileMenu
-              key={employee?.avatarUrl ?? "no-avatar"}
               name={employee?.name ?? "Employee"}
               role={employee ? `${employee.role} · ${employee.department}` : "Staff"}
               avatarUrl={employee?.avatarUrl}

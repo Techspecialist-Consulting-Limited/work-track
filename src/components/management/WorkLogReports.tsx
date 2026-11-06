@@ -131,10 +131,9 @@ export function WorkLogReports() {
           <div className="flex items-center gap-2">
             <ProfileMenu
               name={meEmployee?.name ?? getSessionUser()?.name ?? "Account"}
-              role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR"}
+              role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR / Head of Operations"}
               avatarUrl={meEmployee?.avatarUrl}
               editable={canEditProfile}
-              required={canEditProfile && !meEmployee?.avatarUrl}
             />
             <button type="button" onClick={onExport} disabled={exporting} className="inline-flex h-9 items-center gap-2 rounded-lg bg-wt-violet px-4 text-[13px] font-medium text-white disabled:opacity-60">
               <Download className="h-4 w-4" /> {exporting ? "Preparing…" : "Export .xlsx"}

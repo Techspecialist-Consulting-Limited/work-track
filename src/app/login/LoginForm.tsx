@@ -14,7 +14,7 @@ const ROLES: { id: WorkTrackRole; title: string; description: string; icon: type
   },
   {
     id: "hr",
-    title: "HR",
+    title: "HR / Head of Operations",
     description: "View the team board, records, reports and exports.",
     icon: Users,
   },

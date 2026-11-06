@@ -218,10 +218,9 @@ function ExecutiveDesktopBoard() {
             <InviteChairman />
             <ProfileMenu
               name={meEmployee?.name ?? getSessionUser()?.name ?? "Account"}
-              role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR"}
+              role={meEmployee ? `${meEmployee.role} · ${meEmployee.department}` : getSessionRole() === "chairman" ? "Chairman" : "HR / Head of Operations"}
               avatarUrl={meEmployee?.avatarUrl}
               editable={canEditProfile}
-              required={canEditProfile && !meEmployee?.avatarUrl}
             />
             <button
               type="button"

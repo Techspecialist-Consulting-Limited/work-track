@@ -80,8 +80,14 @@ async function fileToAvatarDataUrl(file: File): Promise<string> {
 export function ProfileMenu({ name, role, avatarUrl, editable = false, required = false }: ProfileMenuProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [fullName, setFullName] = useState(name);
-  const [photo, setPhoto] = useState<string | null>(avatarUrl ?? null);
+  // Drafts only hold unsaved edits; otherwise the saved props (which hydrate
+  // asynchronously after mount) are the source of truth.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [photoDraft, setPhotoDraft] = useState<string | null | undefined>(undefined);
+  const fullName = nameDraft ?? name;
+  const photo = photoDraft === undefined ? (avatarUrl ?? null) : photoDraft;
+  const setFullName = setNameDraft;
+  const setPhoto = setPhotoDraft;
   const [photoMode, setPhotoMode] = useState<"upload" | "link">("upload");
   const [photoLink, setPhotoLink] = useState("");
   const [saving, setSaving] = useState(false);
@@ -90,8 +96,17 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
   const [toast, setToast] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const isRequired = required && !photo;
+  // Required is based on the saved avatar, so picking a photo doesn't flip the dialog mid-edit.
+  const isRequired = required && !avatarUrl;
   const showDialog = open || isRequired;
+
+  function openDialog() {
+    setNameDraft(null);
+    setPhotoDraft(undefined);
+    setPhotoLink("");
+    setError(null);
+    setOpen(true);
+  }
 
   useEffect(() => {
     if (!showDialog || isRequired) return;
@@ -134,6 +149,8 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
       return;
     }
     setOpen(false);
+    setNameDraft(null);
+    setPhotoDraft(undefined);
     setToast("Profile updated.");
     router.refresh();
   }
@@ -142,7 +159,7 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openDialog}
         aria-label={`Profile — ${name}`}
         className="relative grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-[#F0EDFF] text-[11px] font-bold text-[#5A3ED0] transition hover:ring-2 hover:ring-[#6C45F5]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
       >

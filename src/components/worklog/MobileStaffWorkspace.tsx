@@ -135,7 +135,6 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               My Records
             </button>
             <ProfileMenu
-              key={c.employee?.avatarUrl ?? "no-avatar"}
               name={c.employee?.name ?? "Employee"}
               role={c.employee ? `${c.employee.role} · ${c.employee.department}` : "Staff"}
               avatarUrl={c.employee?.avatarUrl}
