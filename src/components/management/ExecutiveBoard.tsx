@@ -50,10 +50,9 @@ const EXERCISE_START_KEY = `${EXERCISE_START.year}-${pad2(EXERCISE_START.month)}
 const EXERCISE_END_KEY = `${EXERCISE_END.year}-${pad2(EXERCISE_END.month)}-${pad2(EXERCISE_END.day)}`;
 
 const STATUS_LABELS_SHORT: Record<TaskStatus, string> = {
-  not_started: "Not started",
   ongoing: "Ongoing",
+  done: "Done",
   blocked: "Blocked",
-  completed: "Done",
   dropped: "Dropped",
 };
 
@@ -618,13 +617,14 @@ function EmployeeDrawer({
   const referencedTaskIds = new Set(day.entries.map((e) => e.taskId));
   const referencedTasks = db.tasks.filter((t) => referencedTaskIds.has(t.id));
   const taskCounts = {
-    done: referencedTasks.filter((t) => t.currentStatus === "completed").length,
-    ongoing: referencedTasks.filter((t) => t.currentStatus === "ongoing" || t.currentStatus === "not_started").length,
+    done: referencedTasks.filter((t) => t.currentStatus === "done").length,
+    ongoing: referencedTasks.filter((t) => t.currentStatus === "ongoing").length,
     blocked: referencedTasks.filter((t) => t.currentStatus === "blocked").length,
     dropped: referencedTasks.filter((t) => t.currentStatus === "dropped").length,
   };
 
-  const completedTasks = db.tasks.filter((t) => t.employeeId === employee.id && t.currentStatus === "completed");
+  const completedTasks = db.tasks.filter((t) => t.employeeId === employee.id && t.currentStatus === "done");
+  const taskStatusOf = (taskId: string): TaskStatus => getTaskById(db, taskId)?.currentStatus ?? "ongoing";
   const employeeTaskIds = new Set(db.tasks.filter((t) => t.employeeId === employee.id).map((t) => t.id));
   const statusEvents = db.statusHistory
     .filter((e) => employeeTaskIds.has(e.taskId))
@@ -727,7 +727,7 @@ function EmployeeDrawer({
                     <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Task</th>
                     <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Description</th>
                     <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Location</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Status</th>
+                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Task status</th>
                     <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2 text-right">Overtime</th>
                   </tr>
                 </thead>
@@ -764,7 +764,10 @@ function EmployeeDrawer({
                           {WORK_LOCATION_LABELS[item.entry.workLocation]}
                         </td>
                         <td className="px-3 py-2.5">
-                          <StatusBadge status={item.entry.statusAtEntry} label={STATUS_LABELS_SHORT[item.entry.statusAtEntry]} />
+                          <StatusBadge
+                            status={taskStatusOf(item.entry.taskId)}
+                            label={STATUS_LABELS_SHORT[taskStatusOf(item.entry.taskId)]}
+                          />
                         </td>
                         <td
                           className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-semibold text-[#B45309]"

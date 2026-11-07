@@ -65,6 +65,24 @@ export function validateTaskTitle(title: string): ValidationResult {
   return ok;
 }
 
+export function validateSubtaskTitle(title: string): ValidationResult {
+  const trimmed = title.trim();
+  if (!trimmed) return fail("Give the subtask a title.");
+  if (trimmed.length > WORKLOG_RULES.subtaskTitleMaxLength) {
+    return fail(`Keep the subtask title under ${WORKLOG_RULES.subtaskTitleMaxLength} characters.`);
+  }
+  return ok;
+}
+
+export function validateProgressBody(body: string): ValidationResult {
+  const trimmed = body.trim();
+  if (!trimmed) return fail("Write a progress update.");
+  if (trimmed.length > WORKLOG_RULES.progressUpdateMaxLength) {
+    return fail(`Keep the progress update under ${WORKLOG_RULES.progressUpdateMaxLength} characters.`);
+  }
+  return ok;
+}
+
 export function validateEvidenceLink(link: string | undefined): ValidationResult {
   if (!link) return ok;
   try {
@@ -127,6 +145,61 @@ export function validateBreakAllowance(
   const requested = durationMinutes(startAt, endAt);
   if (used + requested > WORKLOG_RULES.maxBreakMinutesPerDay) {
     return fail(`Breaks are limited to ${WORKLOG_RULES.maxBreakMinutesPerDay} minutes a day.`);
+  }
+  return ok;
+}
+
+/**
+ * Latest instant a break may run until: the end of its working day or the
+ * rest of that day's break allowance, whichever comes first.
+ */
+export function breakDeadline(breaks: BreakEntry[], brk: BreakEntry): Date {
+  const start = new Date(brk.startAt);
+  const dayKey = getZonedDateKey(start);
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const dayEnd = zonedDateTimeToDate(y, m, d, WORKLOG_RULES.workEndHour, 0);
+  const usedMs = breaks
+    .filter(
+      (other) =>
+        other.id !== brk.id &&
+        other.employeeId === brk.employeeId &&
+        other.endAt !== null &&
+        getZonedDateKey(new Date(other.startAt)) === dayKey
+    )
+    .reduce((total, other) => total + Math.max(0, new Date(other.endAt as string).getTime() - new Date(other.startAt).getTime()), 0);
+  const allowanceEnd = start.getTime() + Math.max(0, WORKLOG_RULES.maxBreakMinutesPerDay * 60_000 - usedMs);
+  return new Date(Math.min(dayEnd.getTime(), allowanceEnd));
+}
+
+/** End instant to record when a running break is stopped at `now`. */
+export function resolveBreakEnd(breaks: BreakEntry[], brk: BreakEntry, now: Date): Date {
+  const capped = Math.min(now.getTime(), breakDeadline(breaks, brk).getTime());
+  // A break must last at least a minute so the end stays after the start.
+  return new Date(Math.max(capped, new Date(brk.startAt).getTime() + 60_000));
+}
+
+export function validateBreakStart(
+  breaks: BreakEntry[],
+  entries: Pick<WorkEntry, "startAt">[],
+  employeeId: EmployeeId,
+  now: Date = new Date()
+): ValidationResult {
+  const mine = breaks.filter((brk) => brk.employeeId === employeeId);
+  if (mine.some((brk) => brk.endAt === null)) return fail("A break is already running.");
+  if (getSchedulePeriod(now) !== "normal_hours") {
+    return fail("Breaks can only be taken on working days between 09:00 and 17:00.");
+  }
+  const todayKey = getZonedDateKey(now);
+  if (breakMinutesOnDay(mine, employeeId, todayKey, now) >= WORKLOG_RULES.maxBreakMinutesPerDay) {
+    return fail(`You have used your ${WORKLOG_RULES.maxBreakMinutesPerDay}-minute break allowance for today.`);
+  }
+  if (
+    entries.some(
+      (entry) =>
+        new Date(entry.startAt).getTime() >= now.getTime() && getZonedDateKey(new Date(entry.startAt)) === todayKey
+    )
+  ) {
+    return fail("You have work logged for later today. Delete it before starting a break.");
   }
   return ok;
 }

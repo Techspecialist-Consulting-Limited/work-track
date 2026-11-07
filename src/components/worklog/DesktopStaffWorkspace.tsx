@@ -6,16 +6,17 @@ import {
   Check,
   Coffee,
   House,
+  ListChecks,
   Plus,
   Save,
   Square,
+  X,
   Zap,
 } from "lucide-react";
 import { WorkTrackSelect } from "@/components/WorkTrackSelect";
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
-import { getTaskById } from "@/lib/worklog/selectors";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
 import {
@@ -23,8 +24,6 @@ import {
   INPUT_CLASS,
   NEW_TASK,
   SCHEDULED_MINUTES,
-  STATUS_LABELS,
-  STATUS_OPTIONS,
 } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
@@ -35,7 +34,6 @@ const LOCATION_ICONS = {
 
 export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
   const {
-    db,
     now,
     summary,
     slots,
@@ -47,6 +45,18 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     setTaskChoice,
     newTaskTitle,
     setNewTaskTitle,
+    newTaskCategory,
+    setNewTaskCategory,
+    newTaskNote,
+    setNewTaskNote,
+    newTaskSubtasks,
+    addNewTaskSubtask,
+    updateNewTaskSubtask,
+    removeNewTaskSubtask,
+    categories,
+    selectedTaskSubtasks,
+    subtaskChoice,
+    setSubtaskChoice,
     description,
     setDescription,
     startTime,
@@ -66,10 +76,6 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     editingId,
     selectedSlot,
     setSelectedSlot,
-    statusChoice,
-    setStatusChoice,
-    statusReason,
-    setStatusReason,
     error,
     activeBreak,
     submitting,
@@ -85,6 +91,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     handleStartBreak,
     handleEndBreak,
     openRecords,
+    openTaskDetails,
     coveredMinutes,
     remainingMinutes,
     progressWorkWidth,
@@ -105,6 +112,14 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
             <span className="text-sm font-bold tracking-tight text-[#17172F]">WorkTrack</span>
           </div>
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => openTaskDetails()}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-[#E7E6F0] px-2 text-xs font-semibold text-[#4A4665] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] sm:px-3 sm:text-sm"
+            >
+              <ListChecks size={15} aria-hidden="true" />
+              My Tasks
+            </button>
             <button
               type="button"
               onClick={openRecords}
@@ -253,42 +268,115 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                   </button>
                 </div>
                 {effectiveTaskMode === "continue" ? (
-                  <div className="grid grid-cols-2 items-end gap-2">
-                    <input
-                      value={taskSearch}
-                      onChange={(event) => setTaskSearch(event.target.value)}
-                      aria-label="Search ongoing or blocked tasks"
-                      placeholder="Search tasks..."
-                      className={BASE_INPUT_CLASS}
-                      disabled={Boolean(editingId)}
-                    />
-                    <WorkTrackSelect
-                      label="Choose a task"
-                      value={taskChoice}
-                      placeholder="Select a task"
-                      disabled={Boolean(editingId)}
-                      onChange={(value) => {
-                        if (value === NEW_TASK) selectTaskMode("new");
-                        else {
-                          setTaskChoice(value);
-                          const task = getTaskById(db, value);
-                          setStatusChoice(task && task.currentStatus !== "not_started" ? task.currentStatus : "ongoing");
-                        }
-                      }}
-                      options={taskOptions}
-                    />
-                  </div>
+                  <>
+                    <div className="grid grid-cols-2 items-end gap-2">
+                      <input
+                        value={taskSearch}
+                        onChange={(event) => setTaskSearch(event.target.value)}
+                        aria-label="Search ongoing or blocked tasks"
+                        placeholder="Search tasks..."
+                        className={BASE_INPUT_CLASS}
+                        disabled={Boolean(editingId)}
+                      />
+                      <WorkTrackSelect
+                        label="Choose a task"
+                        value={taskChoice}
+                        placeholder="Select a task"
+                        disabled={Boolean(editingId)}
+                        onChange={(value) => {
+                          if (value === NEW_TASK) selectTaskMode("new");
+                          else setTaskChoice(value);
+                        }}
+                        options={taskOptions}
+                      />
+                    </div>
+                    {selectedTaskSubtasks.length ? (
+                      <div className="mt-1.5">
+                        <WorkTrackSelect
+                          label="Subtask (optional)"
+                          value={subtaskChoice}
+                          disabled={Boolean(editingId)}
+                          onChange={setSubtaskChoice}
+                          options={[
+                            { value: "", label: "No specific subtask", description: "Log against the main task" },
+                            ...selectedTaskSubtasks.map((subtask) => ({
+                              value: subtask.id,
+                              label: subtask.title,
+                              description: subtask.status === "done" ? "Done" : subtask.status === "dropped" ? "Dropped" : "Open",
+                            })),
+                          ]}
+                        />
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
-                  <label className="block text-xs font-semibold text-[#53506B]">
-                    Task title
-                    <input
-                      value={newTaskTitle}
-                      maxLength={WORKLOG_RULES.taskTitleMaxLength}
-                      onChange={(event) => setNewTaskTitle(event.target.value)}
-                      placeholder="Give this task a clear name"
-                      className={INPUT_CLASS}
-                    />
-                  </label>
+                  <div className="space-y-1.5">
+                    <div className="grid grid-cols-2 items-end gap-2">
+                      <label className="block text-xs font-semibold text-[#53506B]">
+                        Task title
+                        <input
+                          value={newTaskTitle}
+                          maxLength={WORKLOG_RULES.taskTitleMaxLength}
+                          onChange={(event) => setNewTaskTitle(event.target.value)}
+                          placeholder="Give this task a clear name"
+                          className={INPUT_CLASS}
+                        />
+                      </label>
+                      <WorkTrackSelect
+                        label="Category (optional)"
+                        value={newTaskCategory}
+                        placeholder="No category"
+                        onChange={setNewTaskCategory}
+                        options={[
+                          { value: "", label: "No category" },
+                          ...categories.map((category) => ({ value: category.id, label: category.name })),
+                        ]}
+                      />
+                    </div>
+                    {newTaskSubtasks.map((subtask, index) => (
+                      <div key={index} className="flex items-end gap-1.5">
+                        <label className="block flex-1 text-xs font-semibold text-[#53506B]">
+                          Subtask {index + 1}
+                          <input
+                            value={subtask}
+                            maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                            onChange={(event) => updateNewTaskSubtask(index, event.target.value)}
+                            placeholder="A smaller piece of this task"
+                            className={INPUT_CLASS}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => removeNewTaskSubtask(index)}
+                          aria-label={`Remove subtask ${index + 1}`}
+                          className="mb-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#777A91] hover:bg-[#F1F1F5] hover:text-[#B42318]"
+                        >
+                          <X size={14} aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      <button
+                        type="button"
+                        onClick={addNewTaskSubtask}
+                        className="inline-flex min-h-7 items-center gap-1 text-[11px] font-semibold text-[#6C45F5] hover:underline"
+                      >
+                        <Plus size={12} aria-hidden="true" /> Add subtask
+                      </button>
+                      <span className="text-[10px] text-[#9A97AD]">Subtasks can also be added later from My Tasks.</span>
+                    </div>
+                    <label className="block text-xs font-semibold text-[#53506B]">
+                      Initial progress note (optional)
+                      <textarea
+                        value={newTaskNote}
+                        onChange={(event) => setNewTaskNote(event.target.value)}
+                        rows={2}
+                        maxLength={WORKLOG_RULES.progressUpdateMaxLength}
+                        placeholder="Where are you starting from?"
+                        className={`${INPUT_CLASS} resize-y`}
+                      />
+                    </label>
+                  </div>
                 )}
               </section>
 
@@ -432,39 +520,15 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               </fieldset>
 
               <div className="relative min-w-0 space-y-1.5">
-                <div>
-                  <p className="mb-1 text-[11px] font-semibold text-[#53506B] sm:text-xs">Status</p>
-                  <WorkTrackSelect
-                    label="Task status"
-                    value={statusChoice}
-                    disabled={Boolean(editingId)}
-                    onChange={setStatusChoice}
-                    options={STATUS_OPTIONS.map((status) => ({ value: status, label: STATUS_LABELS[status] }))}
-                  />
-                </div>
-                {statusChoice === "blocked" || statusChoice === "dropped" ? (
-                  <label className="block text-[10px] font-semibold text-[#53506B] sm:text-xs">
-                    {statusChoice === "blocked" ? "What is blocking the task?" : "Why is the task being dropped?"}
-                    <input
-                      value={statusReason}
-                      onChange={(event) => setStatusReason(event.target.value)}
-                      maxLength={WORKLOG_RULES.reasonMaxLength}
-                      placeholder="Add a short reason"
-                      className="mt-1 h-8 w-full rounded-lg border border-[#E7E6F0] bg-white px-2 text-xs text-[#17172F] outline-none focus:border-[#6C45F5]"
-                      disabled={Boolean(editingId)}
-                    />
-                  </label>
-                ) : null}
-                {(!(statusChoice === "blocked" || statusChoice === "dropped") || editingId) ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowEvidenceLink((value) => !value)}
-                    aria-expanded={showEvidenceLink}
-                    className="min-h-7 text-left text-[10px] font-medium text-[#6C45F5] hover:underline sm:text-xs"
-                  >
-                    {showEvidenceLink ? "Hide evidence" : "Add evidence (optional)"}
-                  </button>
-                ) : null}
+                <p className="mb-1 text-[11px] font-semibold text-[#53506B] sm:text-xs">Evidence</p>
+                <button
+                  type="button"
+                  onClick={() => setShowEvidenceLink((value) => !value)}
+                  aria-expanded={showEvidenceLink}
+                  className="min-h-7 text-left text-[10px] font-medium text-[#6C45F5] hover:underline sm:text-xs"
+                >
+                  {showEvidenceLink ? "Hide evidence" : "Add evidence (optional)"}
+                </button>
                 {showEvidenceLink ? (
                   <label className="absolute bottom-full left-0 right-0 z-30 mb-1 block rounded-xl border border-[#E7E6F0] bg-white p-2 text-[10px] font-medium text-[#777A91] shadow-lg sm:text-xs">
                     Evidence link

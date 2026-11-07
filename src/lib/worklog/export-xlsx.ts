@@ -29,13 +29,16 @@ function styleSheet(sheet: ExcelJS.Worksheet, headers: string[], widths: number[
 function entryRow(db: WorkLogDatabase, e: WorkEntry) {
   const employee = db.employees.find((x) => x.id === e.employeeId);
   const task = db.tasks.find((t) => t.id === e.taskId);
+  const subtask = e.subtaskId ? db.subtasks.find((s) => s.id === e.subtaskId) : undefined;
   return {
     date: formatDateLabel(dateKeyOf(e.startAt)),
     employee: employee?.name ?? e.employeeId,
     task: task?.title ?? "",
+    subtask: subtask?.title ?? "",
     description: e.description,
     location: WORK_LOCATION_LABELS[e.workLocation],
-    statusAtEntry: TASK_STATUS_LABELS[e.statusAtEntry],
+    /** Work entries do not own status; this is the task's current status. */
+    taskStatus: task ? TASK_STATUS_LABELS[task.currentStatus] : "",
     start: excelLocalDateTime(e.startAt),
     end: excelLocalDateTime(e.endAt),
     durationHours: hours(durationMinutes(e.startAt, e.endAt)),
@@ -57,15 +60,15 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const logSheet = workbook.addWorksheet("Work Log");
   styleSheet(
     logSheet,
-    ["Date", "Employee", "Start", "End", "Task", "Description", "Location", "Status at entry", "Overtime (h)", "Reported overtime", "Evidence"],
-    [14, 20, 8, 8, 30, 40, 12, 20, 13, 17, 30]
+    ["Date", "Employee", "Start", "End", "Task", "Subtask", "Description", "Location", "Task status (current)", "Overtime (h)", "Reported overtime", "Evidence"],
+    [14, 20, 8, 8, 30, 24, 40, 12, 20, 13, 17, 30]
   );
   const logEntries = [...entries].sort((a, b) =>
     a.employeeId === b.employeeId ? a.startAt.localeCompare(b.startAt) : a.employeeId.localeCompare(b.employeeId)
   );
   for (const e of logEntries) {
     const r = entryRow(db, e);
-    logSheet.addRow([r.date, r.employee, r.start, r.end, r.task, r.description, r.location, r.statusAtEntry, r.overtimeHours, r.reportedOvertime, r.evidence]);
+    logSheet.addRow([r.date, r.employee, r.start, r.end, r.task, r.subtask, r.description, r.location, r.taskStatus, r.overtimeHours, r.reportedOvertime, r.evidence]);
   }
   logSheet.getColumn(3).numFmt = "hh:mm";
   logSheet.getColumn(4).numFmt = "hh:mm";

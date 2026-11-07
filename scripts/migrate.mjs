@@ -4,7 +4,12 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 
-const client = postgres(process.env.DATABASE_URL, { ssl: "require", max: 1 });
+const client = postgres(process.env.DATABASE_URL, {
+  ssl: "require",
+  max: 1,
+  // The Supabase transaction pooler hangs on pipelined statements.
+  max_pipeline: 1,
+});
 const db = drizzle(client);
 
 await migrate(db, { migrationsFolder: "./drizzle" });

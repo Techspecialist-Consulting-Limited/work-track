@@ -2,20 +2,26 @@ import { connection } from "next/server";
 import { NextResponse } from "next/server";
 import { AuthzError, getMembership } from "@/lib/auth/authorize";
 import {
+  addProgressUpdateAction,
   addWorkEntryAction,
+  createSubtaskAction,
   createTaskAction,
+  editProgressUpdateAction,
   editWorkEntryAction,
   endBreakAction,
   inviteChairmanAction,
   setManagementReviewAction,
   snapshotFor,
   startBreakAction,
+  updateBreakAction,
   updateProfileAction,
+  updateSubtaskAction,
+  updateSubtaskStatusAction,
+  updateTaskAction,
   updateTaskStatusAction,
   voidWorkEntryAction,
   type ActionResult,
 } from "@/lib/db/worklog-actions";
-
 
 type Body = { action?: string; payload?: Record<string, unknown>; scope?: string };
 
@@ -42,13 +48,37 @@ export async function POST(request: Request) {
       case "createTask":
         result = await createTaskAction(membership, p as never);
         break;
+      case "updateTask":
+        result = await updateTaskAction(membership, p as never);
+        break;
       case "updateTaskStatus":
         result = await updateTaskStatusAction(
           membership,
           String(p.taskId),
           p.status as never,
+          p.reason as string | undefined,
+          p.note as string | undefined
+        );
+        break;
+      case "createSubtask":
+        result = await createSubtaskAction(membership, p as never);
+        break;
+      case "updateSubtask":
+        result = await updateSubtaskAction(membership, p as never);
+        break;
+      case "updateSubtaskStatus":
+        result = await updateSubtaskStatusAction(
+          membership,
+          String(p.subtaskId),
+          p.status as never,
           p.reason as string | undefined
         );
+        break;
+      case "addProgressUpdate":
+        result = await addProgressUpdateAction(membership, p as never);
+        break;
+      case "editProgressUpdate":
+        result = await editProgressUpdateAction(membership, p as never);
         break;
       case "setReview":
         result = await setManagementReviewAction(
@@ -66,6 +96,9 @@ export async function POST(request: Request) {
         break;
       case "endBreak":
         result = await endBreakAction(membership, String(p.breakId));
+        break;
+      case "updateBreak":
+        result = await updateBreakAction(membership, p as never);
         break;
       case "inviteChairman":
         result = await inviteChairmanAction(membership, p as never);

@@ -13,6 +13,10 @@ const client = postgres(connectionString, {
   max: 5,
   idle_timeout: 20,
   connect_timeout: 15,
+  // Supabase's transaction pooler (port 6543) does not support pipelining
+  // several statements on one backend; postgres.js v4 pipelines by default
+  // and concurrent reads then hang indefinitely. One query per connection.
+  max_pipeline: 1,
 });
 
 export const db = drizzle(client, { schema });

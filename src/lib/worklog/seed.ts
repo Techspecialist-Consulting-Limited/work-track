@@ -1,5 +1,17 @@
 import { splitIntervalMinutes } from "./time";
-import type { BreakEntry, Employee, Task, TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "./types";
+import type {
+  BreakEntry,
+  Employee,
+  ProgressUpdate,
+  StatusHistoryEvent,
+  Subtask,
+  Task,
+  TaskCategory,
+  TaskStatus,
+  WorkEntry,
+  WorkLocation,
+  WorkLogDatabase,
+} from "./types";
 import { getZonedDateParts, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
 
 export const SIGNED_IN_EMPLOYEE_ID = "alex";
@@ -12,12 +24,30 @@ export const SEED_EMPLOYEES: Employee[] = [
   { id: "ibrahim", name: "Ibrahim Musa", role: "Customer Support Lead", department: "Support" },
 ];
 
+/** Default categories. Tasks may be uncategorised; the field is optional. */
+export const SEED_CATEGORIES: TaskCategory[] = [
+  { id: "development", name: "Development" },
+  { id: "design", name: "Design" },
+  { id: "analysis", name: "Analysis" },
+  { id: "operations", name: "Operations" },
+  { id: "support", name: "Support" },
+  { id: "administration", name: "Administration" },
+];
+
 const TASK_TITLES: Record<string, string[]> = {
   alex: ["Login page fixes", "Sprint API integration", "Release checklist"],
   sarah: ["Requirements for billing", "Stakeholder interviews", "Process map review"],
   david: ["Pipeline hardening", "Staging environment", "Monitoring alerts"],
   esther: ["Onboarding flow redesign", "Design system tokens", "Usability notes"],
   ibrahim: ["Ticket backlog triage", "Customer escalation playbook", "Weekly support report"],
+};
+
+const TASK_CATEGORIES: Record<string, string[]> = {
+  alex: ["development", "development", "operations"],
+  sarah: ["analysis", "analysis", "administration"],
+  david: ["operations", "operations", "development"],
+  esther: ["design", "design", "analysis"],
+  ibrahim: ["support", "support", "administration"],
 };
 
 const DESCRIPTIONS = [
@@ -27,6 +57,11 @@ const DESCRIPTIONS = [
   "Met with the team to agree the next steps.",
   "Built and tested the change locally.",
   "Prepared the update for the weekly review.",
+];
+
+const SUBTASK_TITLES = [
+  ["Reproduce the reported issue", "Ship the fix and confirm"],
+  ["Collect the required inputs", "Review with the owner"],
 ];
 
 /** Exercise window: Mon 26 Oct 2026 to Fri 6 Nov 2026 (Lagos calendar days). */
@@ -56,21 +91,52 @@ function lagosIso(year: number, month: number, day: number, hour: number, minute
   return zonedDateTimeToDate(year, month, day, hour, minute).toISOString();
 }
 
-function buildTasks(employee: Employee): Task[] {
+interface EmployeeWork {
+  tasks: Task[];
+  subtasks: Subtask[];
+  progressUpdates: ProgressUpdate[];
+  statusHistory: StatusHistoryEvent[];
+}
+
+/**
+ * Builds a realistic task graph: one ongoing task, one blocked task and one Done
+ * task per employee, each with subtasks, a progress update and status history.
+ */
+function buildEmployeeWork(employee: Employee): EmployeeWork {
   const titles = TASK_TITLES[employee.id] ?? [];
+  const categories = TASK_CATEGORIES[employee.id] ?? [];
   const createdAt = lagosIso(WINDOW_START.year, WINDOW_START.month, WINDOW_START.day, 9, 0);
-  return titles.map((title, index) => {
-    const status: TaskStatus = index === 0 ? "ongoing" : index === 1 ? "blocked" : "completed";
+  const progressAt = lagosIso(WINDOW_START.year, WINDOW_START.month, WINDOW_START.day, 16, 0);
+  const finishedAt = lagosIso(2026, 10, 30, 17, 0);
+  const blockedAt = lagosIso(2026, 10, 27, 14, 0);
+
+  const tasks: Task[] = [];
+  const subtasks: Subtask[] = [];
+  const progressUpdates: ProgressUpdate[] = [];
+  const statusHistory: StatusHistoryEvent[] = [];
+
+  titles.forEach((title, index) => {
+    const taskId = `${employee.id}-task-${index + 1}`;
+    const status: TaskStatus = index === 0 ? "ongoing" : index === 1 ? "blocked" : "done";
+    const categoryId = categories[index];
+    const category = SEED_CATEGORIES.find((item) => item.id === categoryId);
+
+    const terminalAt = status === "done" ? finishedAt : status === "blocked" ? blockedAt : createdAt;
     const task: Task = {
-      id: `${employee.id}-task-${index + 1}`,
+      id: taskId,
       employeeId: employee.id,
       title,
+      description: DESCRIPTIONS[index % DESCRIPTIONS.length],
+      categoryId: category?.id,
+      categoryName: category?.name,
       currentStatus: status,
       createdAt,
+      updatedAt: terminalAt,
+      statusUpdatedAt: terminalAt,
     };
     if (status === "blocked") task.blockerReason = "Waiting for access to the staging server.";
-    if (status === "completed") {
-      task.completedAt = lagosIso(2026, 10, 30, 17, 0);
+    if (status === "done") {
+      task.completedAt = finishedAt;
       if (index === 2 && employee.id !== SIGNED_IN_EMPLOYEE_ID) {
         task.managementReview = {
           status: "accepted",
@@ -79,8 +145,111 @@ function buildTasks(employee: Employee): Task[] {
         };
       }
     }
-    return task;
+    tasks.push(task);
+
+    statusHistory.push({
+      id: `${taskId}-history-created`,
+      taskId,
+      previousStatus: null,
+      newStatus: "ongoing",
+      changedAt: createdAt,
+    });
+    if (status !== "ongoing") {
+      statusHistory.push({
+        id: `${taskId}-history-${status}`,
+        taskId,
+        previousStatus: "ongoing",
+        newStatus: status,
+        changeNote:
+          status === "blocked"
+            ? "Waiting for access to the staging server."
+            : "All subtasks finished; task closed.",
+        changedAt: terminalAt,
+      });
+    }
+
+    // Subtasks are independent: a blocked parent can still have finished work.
+    const subtaskStatuses: TaskStatus[] =
+      status === "done" ? ["done", "done"] : status === "blocked" ? ["done", "blocked"] : ["done", "ongoing"];
+    const subtaskTitles = SUBTASK_TITLES[index % SUBTASK_TITLES.length];
+    subtaskStatuses.forEach((subtaskStatus, subtaskIndex) => {
+      const subtaskId = `${taskId}-sub-${subtaskIndex + 1}`;
+      const subtaskCreated = createdAt;
+      const subtaskChanged =
+        subtaskStatus === "ongoing"
+          ? subtaskCreated
+          : subtaskStatus === "blocked"
+            ? blockedAt
+            : lagosIso(2026, 10, 29, 15, 0);
+      subtasks.push({
+        id: subtaskId,
+        taskId,
+        title: subtaskTitles[subtaskIndex],
+        description:
+          subtaskIndex === 0 ? "First step of the deliverable." : "Finish and confirm the deliverable.",
+        status: subtaskStatus,
+        displayOrder: subtaskIndex,
+        createdAt: subtaskCreated,
+        updatedAt: subtaskChanged,
+        statusUpdatedAt: subtaskChanged,
+        completedAt: subtaskStatus === "done" ? subtaskChanged : undefined,
+      });
+      statusHistory.push({
+        id: `${subtaskId}-history-created`,
+        taskId,
+        subtaskId,
+        previousStatus: null,
+        newStatus: "ongoing",
+        changedAt: subtaskCreated,
+      });
+      if (subtaskStatus !== "ongoing") {
+        statusHistory.push({
+          id: `${subtaskId}-history-${subtaskStatus}`,
+          taskId,
+          subtaskId,
+          previousStatus: "ongoing",
+          newStatus: subtaskStatus,
+          changeNote: subtaskStatus === "blocked" ? "Blocked on access." : "Completed and verified.",
+          changedAt: subtaskChanged,
+        });
+      }
+    });
+
+    const progressId = `${taskId}-progress-1`;
+    const progress: ProgressUpdate = {
+      id: progressId,
+      taskId,
+      authorEmployeeId: employee.id,
+      authorName: employee.name,
+      body:
+        status === "done"
+          ? "All subtasks finished and the result was reviewed with the team."
+          : status === "blocked"
+            ? "First subtask is complete. The remaining work is waiting on staging access."
+            : "Started on the first subtask and logged the findings for the team.",
+      createdAt: progressAt,
+      updatedAt: progressAt,
+      revisions: [],
+    };
+    // Demonstrate append-only editing history without losing the earlier body.
+    if (employee.id === SIGNED_IN_EMPLOYEE_ID && index === 0) {
+      const editedAt = lagosIso(2026, 10, 28, 10, 0);
+      progress.revisions.push({
+        id: `${progressId}-rev-1`,
+        progressUpdateId: progressId,
+        previousBody: "Started looking into the reported issue.",
+        revisedByName: employee.name,
+        revisedAt: editedAt,
+        revisionReason: "Added the outcome of the first review.",
+      });
+      progress.editedAt = editedAt;
+      progress.editedByName = employee.name;
+      progress.updatedAt = editedAt;
+    }
+    progressUpdates.push(progress);
   });
+
+  return { tasks, subtasks, progressUpdates, statusHistory };
 }
 
 function buildEntry(
@@ -90,18 +259,19 @@ function buildEntry(
   startAt: string,
   endAt: string,
   workLocation: WorkLocation,
-  descriptionIndex: number
+  descriptionIndex: number,
+  subtaskId?: string
 ): WorkEntry {
   const split = splitIntervalMinutes(startAt, endAt);
   return {
     id: `${employeeId}-entry-${key}`,
     employeeId,
     taskId: task.id,
+    subtaskId,
     description: DESCRIPTIONS[descriptionIndex % DESCRIPTIONS.length],
     startAt,
     endAt,
     workLocation,
-    statusAtEntry: task.currentStatus,
     normalMinutes: split.normalMinutes,
     overtimeMinutes: split.overtimeMinutes,
     isReportedOvertime: false,
@@ -114,12 +284,25 @@ export function buildSeedDatabase(): WorkLogDatabase {
   const entries: WorkEntry[] = [];
   const breaks: BreakEntry[] = [];
   const tasks: Task[] = [];
+  const subtasks: Subtask[] = [];
+  const progressUpdates: ProgressUpdate[] = [];
+  const statusHistory: StatusHistoryEvent[] = [];
   const days = calendarDays();
   const lastWorkingDay = days.filter((d) => isWorkingDay(d)).at(-1);
 
   for (const employee of SEED_EMPLOYEES) {
-    const employeeTasks = buildTasks(employee);
-    tasks.push(...employeeTasks);
+    const work = buildEmployeeWork(employee);
+    tasks.push(...work.tasks);
+    subtasks.push(...work.subtasks);
+    progressUpdates.push(...work.progressUpdates);
+    statusHistory.push(...work.statusHistory);
+    const employeeTasks = work.tasks;
+    const subtasksByTask = new Map<string, Subtask[]>();
+    for (const subtask of work.subtasks) {
+      const list = subtasksByTask.get(subtask.taskId) ?? [];
+      list.push(subtask);
+      subtasksByTask.set(subtask.taskId, list);
+    }
     const offset = employee.id.length;
 
     for (const { year, month, day } of days) {
@@ -135,7 +318,8 @@ export function buildSeedDatabase(): WorkLogDatabase {
                 lagosIso(year, month, day, sh, 0),
                 lagosIso(year, month, day, eh, 0),
                 "home",
-                day + i
+                day + i,
+                subtasksByTask.get(employeeTasks[0].id)?.[0]?.id
               )
             );
           });
@@ -166,6 +350,8 @@ export function buildSeedDatabase(): WorkLogDatabase {
             ? employeeTasks[0]
             : employeeTasks[(day + slotIndex + offset) % employeeTasks.length];
         const location: WorkLocation = (day + slotIndex + offset) % 3 === 0 ? "home" : "office";
+        // Link some entries to a subtask so reports exercise the optional link.
+        const subtask = slotIndex % 2 === 0 ? undefined : subtasksByTask.get(task.id)?.[0];
         entries.push(
           buildEntry(
             employee.id,
@@ -174,7 +360,8 @@ export function buildSeedDatabase(): WorkLogDatabase {
             lagosIso(year, month, day, sh, 0),
             lagosIso(year, month, day, eh, 0),
             location,
-            day + slotIndex
+            day + slotIndex,
+            subtask?.id
           )
         );
       });
@@ -195,7 +382,17 @@ export function buildSeedDatabase(): WorkLogDatabase {
     }
   }
 
-  return { version: 1, employees: SEED_EMPLOYEES, tasks, entries, breaks, statusHistory: [] };
+  return {
+    version: 1,
+    employees: SEED_EMPLOYEES,
+    categories: SEED_CATEGORIES,
+    tasks,
+    subtasks,
+    progressUpdates,
+    entries,
+    breaks,
+    statusHistory,
+  };
 }
 
 function isWorkingDay({ year, month, day }: CalendarDay): boolean {

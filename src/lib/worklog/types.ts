@@ -1,11 +1,14 @@
 export type EmployeeId = string;
 export type TaskId = string;
+export type SubtaskId = string;
 export type EntryId = string;
 export type BreakId = string;
+export type ProgressUpdateId = string;
 
 export type WorkLocation = "office" | "home" | "other";
 
-export type TaskStatus = "not_started" | "ongoing" | "blocked" | "completed" | "dropped";
+/** The four valid task/subtask statuses. There is deliberately no "not started". */
+export type TaskStatus = "ongoing" | "done" | "blocked" | "dropped";
 
 export type ManagementReviewStatus = "accepted" | "needs_changes";
 
@@ -19,21 +22,70 @@ export interface Employee {
   avatarUrl?: string;
 }
 
+export interface TaskCategory {
+  id: string;
+  name: string;
+}
+
 export interface Task {
   id: TaskId;
   employeeId: EmployeeId;
   title: string;
+  description?: string;
+  categoryId?: string;
+  categoryName?: string;
   currentStatus: TaskStatus;
   blockerReason?: string;
   droppedReason?: string;
   createdAt: string;
+  updatedAt: string;
+  statusUpdatedAt: string;
   completedAt?: string;
-  droppedAt?: string;
+  /** The status change that created this task, if known. */
+  initialStatusPending?: boolean;
   managementReview?: {
     status: ManagementReviewStatus;
     note?: string;
     reviewedAt: string;
   };
+}
+
+export interface Subtask {
+  id: SubtaskId;
+  taskId: TaskId;
+  title: string;
+  description?: string;
+  status: TaskStatus;
+  displayOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  statusUpdatedAt: string;
+  completedAt?: string;
+}
+
+export interface ProgressUpdateRevision {
+  id: string;
+  progressUpdateId: ProgressUpdateId;
+  previousBody: string;
+  revisedBy?: string;
+  revisedByName?: string;
+  revisedAt: string;
+  revisionReason?: string;
+}
+
+export interface ProgressUpdate {
+  id: ProgressUpdateId;
+  taskId: TaskId;
+  subtaskId?: SubtaskId;
+  authorEmployeeId: EmployeeId;
+  authorName?: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  editedAt?: string;
+  editedBy?: string;
+  editedByName?: string;
+  revisions: ProgressUpdateRevision[];
 }
 
 export interface WorkEntryRevision {
@@ -48,12 +100,12 @@ export interface WorkEntry {
   id: EntryId;
   employeeId: EmployeeId;
   taskId: TaskId;
+  /** Optional subtask within the task, when the work relates to one deliverable. */
+  subtaskId?: SubtaskId;
   description: string;
   startAt: string;
   endAt: string;
   workLocation: WorkLocation;
-  /** Status recorded for this entry — the status chosen when logging (defaults to the task's status). Never changes after creation. */
-  statusAtEntry: TaskStatus;
   /** Minutes inside the 09:00–17:00 working window on a working day. */
   normalMinutes: number;
   /** Minutes outside the working window, or on a non-working day. */
@@ -62,6 +114,7 @@ export interface WorkEntry {
   isReportedOvertime: boolean;
   evidenceLink?: string;
   createdAt: string;
+  updatedAt?: string;
   revisions: WorkEntryRevision[];
 }
 
@@ -72,14 +125,17 @@ export interface BreakEntry {
   /** Null while the break is still running. */
   endAt: string | null;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface StatusHistoryEvent {
   id: string;
   taskId: TaskId;
+  subtaskId?: SubtaskId;
   previousStatus: TaskStatus | null;
   newStatus: TaskStatus;
   changedBy?: string;
+  changedByName?: string;
   changeNote?: string;
   changedAt: string;
 }
@@ -87,7 +143,10 @@ export interface StatusHistoryEvent {
 export interface WorkLogDatabase {
   version: 1;
   employees: Employee[];
+  categories: TaskCategory[];
   tasks: Task[];
+  subtasks: Subtask[];
+  progressUpdates: ProgressUpdate[];
   entries: WorkEntry[];
   breaks: BreakEntry[];
   statusHistory: StatusHistoryEvent[];

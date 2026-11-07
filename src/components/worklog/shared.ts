@@ -1,5 +1,5 @@
 import { WORKTRACK_SCHEDULE, getZonedDateKey, getZonedDateParts, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
-import { TASK_STATUS_LABELS } from "@/lib/worklog/config";
+import { TASK_STATUSES, TASK_STATUS_LABELS } from "@/lib/worklog/config";
 import { dateKeyOf } from "@/lib/worklog/time";
 import type { BreakEntry, Task, TaskStatus, WorkEntry } from "@/lib/worklog/types";
 
@@ -11,17 +11,9 @@ export const SCHEDULED_MINUTES = (() => {
   return endHour * 60 + endMinute - (startHour * 60 + startMinute);
 })();
 
-export const STATUS_OPTIONS: TaskStatus[] = ["ongoing", "completed", "blocked", "dropped"];
+export const STATUS_OPTIONS: TaskStatus[] = [...TASK_STATUSES];
 
-export const STATUS_LABELS: Record<TaskStatus, string> = {
-  not_started: TASK_STATUS_LABELS.not_started,
-  ongoing: TASK_STATUS_LABELS.ongoing,
-  blocked: TASK_STATUS_LABELS.blocked,
-  completed: "Done",
-  dropped: TASK_STATUS_LABELS.dropped,
-};
-
-export const MOBILE_STATUS_OPTIONS: TaskStatus[] = ["ongoing", "completed", "blocked", "dropped"];
+export const STATUS_LABELS: Record<TaskStatus, string> = { ...TASK_STATUS_LABELS };
 
 export const BASE_INPUT_CLASS =
   "min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-2.5 py-2 text-[13px] text-[#17172F] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15 sm:text-sm";
@@ -118,8 +110,8 @@ export function getTaskStatusCounts(dbTasks: Task[], entries: WorkEntry[]) {
   const taskIds = new Set(entries.map((entry) => entry.taskId));
   const tasks = dbTasks.filter((task) => taskIds.has(task.id));
   return {
-    completed: tasks.filter((task) => task.currentStatus === "completed").length,
-    ongoing: tasks.filter((task) => task.currentStatus === "ongoing" || task.currentStatus === "not_started").length,
+    done: tasks.filter((task) => task.currentStatus === "done").length,
+    ongoing: tasks.filter((task) => task.currentStatus === "ongoing").length,
     blocked: tasks.filter((task) => task.currentStatus === "blocked").length,
     dropped: tasks.filter((task) => task.currentStatus === "dropped").length,
   };

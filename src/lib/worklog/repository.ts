@@ -1,16 +1,25 @@
 import { splitIntervalMinutes } from "./time";
 import {
+  resolveBreakEnd,
+  validateBreakStart,
   validateDescription,
   validateEntryTimes,
   validateEvidenceLink,
+  validateProgressBody,
   validateReason,
+  validateSubtaskTitle,
   validateTaskTitle,
   type ValidationResult,
 } from "./validation";
+import { checkParentCanBeDone, checkSubtaskStatusChange, nextCompletedAt } from "./status-rules";
 import type {
   BreakEntry,
   EmployeeId,
   ManagementReviewStatus,
+  ProgressUpdate,
+  Subtask,
+  Task,
+  TaskCategory,
   TaskStatus,
   WorkEntry,
   WorkLocation,
@@ -28,7 +37,17 @@ function queueAfter(taskId: string | undefined, send: () => void) {
   else send();
 }
 
-const EMPTY_DB: WorkLogDatabase = { version: 1, employees: [], tasks: [], entries: [], breaks: [], statusHistory: [] };
+const EMPTY_DB: WorkLogDatabase = {
+  version: 1,
+  employees: [],
+  categories: [],
+  tasks: [],
+  subtasks: [],
+  progressUpdates: [],
+  entries: [],
+  breaks: [],
+  statusHistory: [],
+};
 
 const listeners = new Set<Listener>();
 let cache: WorkLogDatabase | null = null;
@@ -49,7 +68,15 @@ interface StateResponse {
 function isDatabase(value: unknown): value is WorkLogDatabase {
   if (!value || typeof value !== "object") return false;
   const db = value as Partial<WorkLogDatabase>;
-  return db.version === 1 && Array.isArray(db.employees) && Array.isArray(db.tasks) && Array.isArray(db.entries) && Array.isArray(db.breaks);
+  return (
+    db.version === 1 &&
+    Array.isArray(db.employees) &&
+    Array.isArray(db.tasks) &&
+    Array.isArray(db.subtasks) &&
+    Array.isArray(db.progressUpdates) &&
+    Array.isArray(db.entries) &&
+    Array.isArray(db.breaks)
+  );
 }
 
 function emit(db: WorkLogDatabase) {
@@ -154,10 +181,16 @@ export function resetDatabase(): void {
   ensureLoaded();
 }
 
-async function syncAction(
-  action: string,
-  payload: Record<string, unknown>
-): Promise<{ ok: boolean; message?: string; taskId?: string; adjustedEntry?: boolean } | null> {
+interface SyncResponse {
+  ok: boolean;
+  message?: string;
+  taskId?: string;
+  subtaskId?: string;
+  progressUpdateId?: string;
+  adjustedEntry?: boolean;
+}
+
+async function syncAction(action: string, payload: Record<string, unknown>): Promise<SyncResponse | null> {
   try {
     const res = await fetch("/api/worklog/action", {
       method: "POST",
@@ -165,19 +198,14 @@ async function syncAction(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, payload, scope: currentScope() }),
     });
-    const data = (await res.json()) as StateResponse & {
-      ok?: boolean;
-      message?: string;
-      taskId?: string;
-      adjustedEntry?: boolean;
-    };
+    const data = (await res.json()) as StateResponse & SyncResponse;
     if (data.db && isDatabase(data.db)) emit(data.db);
     if (!res.ok || data.ok === false) {
       // Server rejected — resync from authoritative state.
       resetDatabase();
       return { ok: false, message: data.message ?? "Could not save. Try again." };
     }
-    return { ok: true, taskId: data.taskId, adjustedEntry: data.adjustedEntry };
+    return data;
   } catch {
     resetDatabase();
     return { ok: false, message: "Could not reach the server. Try again." };
@@ -189,20 +217,40 @@ export type MutationResult = { ok: true } | { ok: false; message: string };
 export interface EntryInput {
   employeeId: EmployeeId;
   taskId: string;
+  /** Optional subtask that belongs to the selected task. */
+  subtaskId?: string | null;
   description: string;
   startAt: string;
   endAt: string;
   workLocation: WorkLocation;
   evidenceLink?: string;
   isReportedOvertime?: boolean;
-  statusAfterEntry?: TaskStatus;
-  statusReason?: string;
+}
+
+export interface TaskInput {
+  employeeId: EmployeeId;
+  title: string;
+  description?: string;
+  categoryId?: string | null;
+  initialNote?: string;
+  subtasks?: { title: string; description?: string }[];
 }
 
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function splitFor(input: Pick<EntryInput, "startAt" | "endAt" | "isReportedOvertime">) {
+  return input.isReportedOvertime
+    ? {
+        normalMinutes: 0,
+        overtimeMinutes: Math.round(
+          (new Date(input.endAt).getTime() - new Date(input.startAt).getTime()) / 60_000
+        ),
+      }
+    : splitIntervalMinutes(input.startAt, input.endAt);
 }
 
 function checkEntryInput(db: WorkLogDatabase, input: EntryInput, ignoreId?: string): ValidationResult {
@@ -213,35 +261,38 @@ function checkEntryInput(db: WorkLogDatabase, input: EntryInput, ignoreId?: stri
   return validateEntryTimes(db, input.employeeId, input.startAt, input.endAt, ignoreId);
 }
 
+function subtaskBelongsTo(db: WorkLogDatabase, taskId: string, subtaskId?: string | null): ValidationResult {
+  if (!subtaskId) return { ok: true };
+  const subtask = db.subtasks.find((item) => item.id === subtaskId);
+  if (!subtask || subtask.taskId !== taskId) {
+    return { ok: false, message: "That subtask does not belong to the selected task." };
+  }
+  return { ok: true };
+}
+
 export function addWorkEntry(input: EntryInput): MutationResult {
   const db = getDatabaseSnapshot();
   const check = checkEntryInput(db, input);
   if (!check.ok) return check;
   const task = db.tasks.find((t) => t.id === input.taskId && t.employeeId === input.employeeId);
   if (!task) return { ok: false, message: "Choose a task first." };
-  if (task.currentStatus === "completed" || task.currentStatus === "dropped") {
+  if (task.currentStatus === "done" || task.currentStatus === "dropped") {
     return { ok: false, message: "This task is closed. Start a new task or continue an open one." };
   }
-  if (input.statusAfterEntry === "blocked" || input.statusAfterEntry === "dropped") {
-    const reason = validateReason(
-      input.statusReason,
-      input.statusAfterEntry === "blocked" ? "being blocked" : "dropping this task"
-    );
-    if (!reason.ok) return reason;
-  }
-  const split = input.isReportedOvertime
-    ? { normalMinutes: 0, overtimeMinutes: Math.round((new Date(input.endAt).getTime() - new Date(input.startAt).getTime()) / 60_000) }
-    : splitIntervalMinutes(input.startAt, input.endAt);
+  const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
+  if (!belongs.ok) return belongs;
+
+  const split = splitFor(input);
   const id = newId();
   const entry: WorkEntry = {
     id,
     employeeId: input.employeeId,
     taskId: task.id,
+    subtaskId: input.subtaskId?.trim() || undefined,
     description: input.description.trim(),
     startAt: input.startAt,
     endAt: input.endAt,
     workLocation: input.workLocation,
-    statusAtEntry: input.statusAfterEntry ?? task.currentStatus,
     normalMinutes: split.normalMinutes,
     overtimeMinutes: split.overtimeMinutes,
     isReportedOvertime: Boolean(input.isReportedOvertime),
@@ -249,20 +300,7 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     createdAt: new Date().toISOString(),
     revisions: [],
   };
-  const updatedTask = input.statusAfterEntry
-    ? {
-        ...task,
-        currentStatus: input.statusAfterEntry,
-        blockerReason: input.statusAfterEntry === "blocked" ? input.statusReason?.trim() : undefined,
-        droppedReason: input.statusAfterEntry === "dropped" ? input.statusReason?.trim() : undefined,
-        completedAt: input.statusAfterEntry === "completed" ? task.completedAt ?? new Date().toISOString() : undefined,
-      }
-    : task;
-  emit({
-    ...db,
-    entries: [...db.entries, entry],
-    tasks: updatedTask === task ? db.tasks : db.tasks.map((item) => item.id === task.id ? updatedTask : item),
-  });
+  emit({ ...db, entries: [...db.entries, entry] });
   queueAfter(input.taskId, () => void syncAction("addEntry", { id, input }));
   return { ok: true };
 }
@@ -273,11 +311,20 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
   if (!existing) return { ok: false, message: "This entry no longer exists." };
   const check = checkEntryInput(db, input, entryId);
   if (!check.ok) return check;
-  const split = input.isReportedOvertime
-    ? { normalMinutes: 0, overtimeMinutes: Math.round((new Date(input.endAt).getTime() - new Date(input.startAt).getTime()) / 60_000) }
-    : splitIntervalMinutes(input.startAt, input.endAt);
+  const task = db.tasks.find((t) => t.id === input.taskId && t.employeeId === input.employeeId);
+  if (!task) return { ok: false, message: "Choose a task that belongs to you." };
+  // Corrections keep an entry on its closed task, but never move it to another closed task.
+  if ((task.currentStatus === "done" || task.currentStatus === "dropped") && existing.taskId !== task.id) {
+    return { ok: false, message: "This task is closed. Reopen it or choose an open task." };
+  }
+  const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
+  if (!belongs.ok) return belongs;
+
+  const split = splitFor(input);
   const updated: WorkEntry = {
     ...existing,
+    taskId: task.id,
+    subtaskId: input.subtaskId?.trim() || undefined,
     description: input.description.trim(),
     startAt: input.startAt,
     endAt: input.endAt,
@@ -286,6 +333,7 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
     isReportedOvertime: Boolean(input.isReportedOvertime),
     normalMinutes: split.normalMinutes,
     overtimeMinutes: split.overtimeMinutes,
+    updatedAt: new Date().toISOString(),
     revisions: [
       ...existing.revisions,
       {
@@ -302,61 +350,315 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
   return { ok: true };
 }
 
-export interface TaskInput {
-  employeeId: EmployeeId;
-  title: string;
-}
-
 export function createTask(input: TaskInput): { ok: true; taskId: string } | { ok: false; message: string } {
   const check = validateTaskTitle(input.title);
   if (!check.ok) return check;
+  const note = input.initialNote?.trim();
+  if (note) {
+    const noteCheck = validateProgressBody(note);
+    if (!noteCheck.ok) return noteCheck;
+  }
   const db = getDatabaseSnapshot();
+  const now = new Date().toISOString();
   const taskId = newId();
+  const task: Task = {
+    id: taskId,
+    employeeId: input.employeeId,
+    title: input.title.trim(),
+    description: input.description?.trim() || undefined,
+    categoryId: input.categoryId?.trim() || undefined,
+    categoryName: input.categoryId
+      ? db.categories.find((category) => category.id === input.categoryId)?.name
+      : undefined,
+    currentStatus: "ongoing",
+    createdAt: now,
+    updatedAt: now,
+    statusUpdatedAt: now,
+  };
+
+  const subtaskRows: Subtask[] = [];
+  const requestedSubtasks = (input.subtasks ?? []).filter((subtask) => subtask.title.trim());
+  for (let index = 0; index < requestedSubtasks.length; index += 1) {
+    const requested = requestedSubtasks[index];
+    const titleCheck = validateSubtaskTitle(requested.title);
+    if (!titleCheck.ok) return titleCheck;
+    subtaskRows.push({
+      id: newId(),
+      taskId,
+      title: requested.title.trim(),
+      description: requested.description?.trim() || undefined,
+      status: "ongoing",
+      displayOrder: index,
+      createdAt: now,
+      updatedAt: now,
+      statusUpdatedAt: now,
+    });
+  }
+
+  const progress: ProgressUpdate[] = note
+    ? [
+        {
+          id: newId(),
+          taskId,
+          authorEmployeeId: input.employeeId,
+          body: note,
+          createdAt: now,
+          updatedAt: now,
+          revisions: [],
+        },
+      ]
+    : [];
+
   emit({
     ...db,
-    tasks: [
-      ...db.tasks,
-      {
-        id: taskId,
-        employeeId: input.employeeId,
-        title: input.title.trim(),
-        currentStatus: "ongoing",
-        createdAt: new Date().toISOString(),
-      },
-    ],
+    tasks: [...db.tasks, task],
+    subtasks: [...db.subtasks, ...subtaskRows],
+    progressUpdates: [...db.progressUpdates, ...progress],
   });
-  const sync = syncAction("createTask", { ...input, id: taskId });
+  const sync = syncAction("createTask", {
+    ...input,
+    id: taskId,
+    subtasks: requestedSubtasks.map((subtask, index) => ({ ...subtask, id: subtaskRows[index].id })),
+  });
   pendingSyncs.set(taskId, sync);
   void sync.finally(() => pendingSyncs.delete(taskId));
   return { ok: true, taskId };
 }
 
+export function updateTask(input: {
+  taskId: string;
+  title: string;
+  description?: string;
+  categoryId?: string | null;
+}): MutationResult {
+  const check = validateTaskTitle(input.title);
+  if (!check.ok) return check;
+  const db = getDatabaseSnapshot();
+  const task = db.tasks.find((t) => t.id === input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  const categoryId = input.categoryId?.trim() || undefined;
+  emit({
+    ...db,
+    tasks: db.tasks.map((t) =>
+      t.id === input.taskId
+        ? {
+            ...t,
+            title: input.title.trim(),
+            description: input.description?.trim() || undefined,
+            categoryId,
+            categoryName: categoryId
+              ? db.categories.find((category) => category.id === categoryId)?.name
+              : undefined,
+            updatedAt: new Date().toISOString(),
+          }
+        : t
+    ),
+  });
+  void syncAction("updateTask", { ...input, categoryId: categoryId ?? null });
+  return { ok: true };
+}
+
 export function updateTaskStatus(
   taskId: string,
   status: TaskStatus,
-  reason?: string
+  reason?: string,
+  note?: string
 ): MutationResult {
   const db = getDatabaseSnapshot();
   const task = db.tasks.find((t) => t.id === taskId);
   if (!task) return { ok: false, message: "Task not found." };
-  if (status === "blocked") {
-    const check = validateReason(reason, "being blocked");
+  if (task.currentStatus === status) return { ok: true };
+  if (status === "blocked" || status === "dropped") {
+    const check = validateReason(reason, status === "blocked" ? "being blocked" : "dropping this task");
     if (!check.ok) return check;
   }
-  if (status === "dropped") {
-    const check = validateReason(reason, "dropping this task");
+  if (status === "done") {
+    const check = checkParentCanBeDone(db.subtasks.filter((subtask) => subtask.taskId === taskId));
     if (!check.ok) return check;
   }
   const now = new Date().toISOString();
-  const updated = {
+  const updated: Task = {
     ...task,
     currentStatus: status,
     blockerReason: status === "blocked" ? reason?.trim() : undefined,
     droppedReason: status === "dropped" ? reason?.trim() : undefined,
-    completedAt: status === "completed" ? task.completedAt ?? now : undefined,
+    completedAt: nextCompletedAt(status, now),
+    statusUpdatedAt: now,
+    updatedAt: now,
   };
   emit({ ...db, tasks: db.tasks.map((t) => (t.id === taskId ? updated : t)) });
-  void syncAction("updateTaskStatus", { taskId, status, reason });
+  void syncAction("updateTaskStatus", { taskId, status, reason, note: note ?? reason });
+  return { ok: true };
+}
+
+export function createSubtask(input: { taskId: string; title: string; description?: string }): MutationResult {
+  const check = validateSubtaskTitle(input.title);
+  if (!check.ok) return check;
+  const db = getDatabaseSnapshot();
+  const task = db.tasks.find((t) => t.id === input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  if (task.currentStatus === "done" || task.currentStatus === "dropped") {
+    return { ok: false, message: "Reopen the main task before adding a subtask." };
+  }
+  const now = new Date().toISOString();
+  const siblings = db.subtasks.filter((subtask) => subtask.taskId === input.taskId);
+  const displayOrder = siblings.length
+    ? Math.max(...siblings.map((subtask) => subtask.displayOrder)) + 1
+    : 0;
+  const id = newId();
+  const subtask: Subtask = {
+    id,
+    taskId: input.taskId,
+    title: input.title.trim(),
+    description: input.description?.trim() || undefined,
+    status: "ongoing",
+    displayOrder,
+    createdAt: now,
+    updatedAt: now,
+    statusUpdatedAt: now,
+  };
+  emit({ ...db, subtasks: [...db.subtasks, subtask] });
+  void syncAction("createSubtask", { ...input, id });
+  return { ok: true };
+}
+
+export function updateSubtask(input: {
+  subtaskId: string;
+  title: string;
+  description?: string;
+}): MutationResult {
+  const check = validateSubtaskTitle(input.title);
+  if (!check.ok) return check;
+  const db = getDatabaseSnapshot();
+  const subtask = db.subtasks.find((item) => item.id === input.subtaskId);
+  if (!subtask) return { ok: false, message: "Subtask not found." };
+  emit({
+    ...db,
+    subtasks: db.subtasks.map((item) =>
+      item.id === input.subtaskId
+        ? {
+            ...item,
+            title: input.title.trim(),
+            description: input.description?.trim() || undefined,
+            updatedAt: new Date().toISOString(),
+          }
+        : item
+    ),
+  });
+  void syncAction("updateSubtask", input);
+  return { ok: true };
+}
+
+export function updateSubtaskStatus(
+  subtaskId: string,
+  status: TaskStatus,
+  reason?: string
+): MutationResult {
+  const db = getDatabaseSnapshot();
+  const subtask = db.subtasks.find((item) => item.id === subtaskId);
+  if (!subtask) return { ok: false, message: "Subtask not found." };
+  const task = db.tasks.find((item) => item.id === subtask.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  if (subtask.status === status) return { ok: true };
+  const allowed = checkSubtaskStatusChange(task, subtask, status);
+  if (!allowed.ok) return allowed;
+  if (status === "blocked" || status === "dropped") {
+    const check = validateReason(
+      reason,
+      status === "blocked" ? "blocking this subtask" : "dropping this subtask"
+    );
+    if (!check.ok) return check;
+  }
+  const now = new Date().toISOString();
+  emit({
+    ...db,
+    subtasks: db.subtasks.map((item) =>
+      item.id === subtaskId
+        ? {
+            ...item,
+            status,
+            completedAt: nextCompletedAt(status, now),
+            statusUpdatedAt: now,
+            updatedAt: now,
+          }
+        : item
+    ),
+  });
+  void syncAction("updateSubtaskStatus", { subtaskId, status, reason });
+  return { ok: true };
+}
+
+export function addProgressUpdate(input: {
+  taskId: string;
+  subtaskId?: string | null;
+  body: string;
+}): MutationResult {
+  const check = validateProgressBody(input.body);
+  if (!check.ok) return check;
+  const db = getDatabaseSnapshot();
+  const task = db.tasks.find((t) => t.id === input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
+  if (!belongs.ok) return belongs;
+  const employeeId = sessionEmployeeId;
+  if (!employeeId) return { ok: false, message: "No employee record linked." };
+  const now = new Date().toISOString();
+  const id = newId();
+  const update: ProgressUpdate = {
+    id,
+    taskId: input.taskId,
+    subtaskId: input.subtaskId?.trim() || undefined,
+    authorEmployeeId: employeeId,
+    authorName: sessionUser?.name ?? undefined,
+    body: input.body.trim(),
+    createdAt: now,
+    updatedAt: now,
+    revisions: [],
+  };
+  emit({ ...db, progressUpdates: [...db.progressUpdates, update] });
+  void syncAction("addProgressUpdate", { ...input, id });
+  return { ok: true };
+}
+
+export function editProgressUpdate(input: {
+  progressUpdateId: string;
+  body: string;
+  revisionReason?: string;
+}): MutationResult {
+  const check = validateProgressBody(input.body);
+  if (!check.ok) return check;
+  const db = getDatabaseSnapshot();
+  const update = db.progressUpdates.find((item) => item.id === input.progressUpdateId);
+  if (!update) return { ok: false, message: "Progress update not found." };
+  const nextBody = input.body.trim();
+  if (nextBody === update.body) return { ok: true };
+  const now = new Date().toISOString();
+  emit({
+    ...db,
+    progressUpdates: db.progressUpdates.map((item) =>
+      item.id === input.progressUpdateId
+        ? {
+            ...item,
+            body: nextBody,
+            editedAt: now,
+            editedByName: sessionUser?.name ?? undefined,
+            updatedAt: now,
+            revisions: [
+              ...item.revisions,
+              {
+                id: newId(),
+                progressUpdateId: item.id,
+                previousBody: item.body,
+                revisedByName: sessionUser?.name ?? undefined,
+                revisedAt: now,
+                revisionReason: input.revisionReason?.trim() || undefined,
+              },
+            ],
+          }
+        : item
+    ),
+  });
+  void syncAction("editProgressUpdate", input);
   return { ok: true };
 }
 
@@ -368,7 +670,7 @@ export function setManagementReview(
   const db = getDatabaseSnapshot();
   const task = db.tasks.find((t) => t.id === taskId);
   if (!task) return { ok: false, message: "Task not found." };
-  if (task.currentStatus !== "completed") return { ok: false, message: "Only completed tasks can be reviewed." };
+  if (task.currentStatus !== "done") return { ok: false, message: "Only Done tasks can be reviewed." };
   if (status === "needs_changes") {
     const check = validateReason(note, "requesting changes");
     if (!check.ok) return check;
@@ -387,10 +689,14 @@ export function setManagementReview(
 
 export function startBreak(employeeId: EmployeeId): MutationResult & { adjustedEntry?: boolean } {
   const db = getDatabaseSnapshot();
-  if (db.breaks.some((b) => b.employeeId === employeeId && b.endAt === null)) {
-    return { ok: false, message: "A break is already running." };
-  }
   const nowDate = new Date();
+  const check = validateBreakStart(
+    db.breaks,
+    db.entries.filter((entry) => entry.employeeId === employeeId),
+    employeeId,
+    nowDate
+  );
+  if (!check.ok) return check;
   const now = nowDate.toISOString();
   const nowMs = nowDate.getTime();
   let adjustedEntry = false;
@@ -407,6 +713,7 @@ export function startBreak(employeeId: EmployeeId): MutationResult & { adjustedE
       endAt: now,
       normalMinutes: split.normalMinutes,
       overtimeMinutes: split.overtimeMinutes,
+      updatedAt: now,
       revisions: [
         ...entry.revisions,
         {
@@ -447,10 +754,66 @@ export function endBreak(breakId: string): MutationResult {
   const db = getDatabaseSnapshot();
   const brk = db.breaks.find((b) => b.id === breakId);
   if (!brk || brk.endAt !== null) return { ok: false, message: "No running break found." };
-  const endAt = new Date().toISOString();
-  emit({ ...db, breaks: db.breaks.map((b) => (b.id === breakId ? { ...b, endAt } : b)) });
+  const endAt = resolveBreakEnd(db.breaks, brk, new Date()).toISOString();
+  emit({
+    ...db,
+    breaks: db.breaks.map((b) => (b.id === breakId ? { ...b, endAt, updatedAt: endAt } : b)),
+  });
   void syncAction("endBreak", { breakId });
   return { ok: true };
+}
+
+/** Correct a break's start/end. Breaks never carry a task or subtask. */
+export function updateBreak(input: {
+  breakId: string;
+  startAt: string;
+  endAt?: string | null;
+}): MutationResult {
+  const db = getDatabaseSnapshot();
+  const brk = db.breaks.find((b) => b.id === input.breakId);
+  if (!brk) return { ok: false, message: "Break not found." };
+  const start = new Date(input.startAt);
+  const end = input.endAt ? new Date(input.endAt) : null;
+  if (Number.isNaN(start.getTime())) return { ok: false, message: "Enter a valid break start time." };
+  if (end && (Number.isNaN(end.getTime()) || end.getTime() <= start.getTime())) {
+    return { ok: false, message: "Break end must be after break start." };
+  }
+  const rangeEnd = end ? end.getTime() : Number.POSITIVE_INFINITY;
+  const clash = db.entries.find(
+    (entry) =>
+      entry.employeeId === brk.employeeId &&
+      start.getTime() < new Date(entry.endAt).getTime() &&
+      new Date(entry.startAt).getTime() < rangeEnd
+  );
+  if (clash) {
+    return { ok: false, message: "This break overlaps a work entry. Adjust the time." };
+  }
+  const breakClash = db.breaks.find(
+    (other) =>
+      other.id !== brk.id &&
+      other.employeeId === brk.employeeId &&
+      start.getTime() <
+        (other.endAt ? new Date(other.endAt).getTime() : Number.POSITIVE_INFINITY) &&
+      new Date(other.startAt).getTime() < rangeEnd
+  );
+  if (breakClash) {
+    return { ok: false, message: "This break overlaps another break. Adjust the time." };
+  }
+  emit({
+    ...db,
+    breaks: db.breaks.map((b) =>
+      b.id === input.breakId
+        ? { ...b, startAt: start.toISOString(), endAt: end?.toISOString() ?? null, updatedAt: new Date().toISOString() }
+        : b
+    ),
+  });
+  void syncAction("updateBreak", input);
+  return { ok: true };
+}
+
+/** Convenience for pickers: active categories from the snapshot. */
+export function getCategories(db: WorkLogDatabase): TaskCategory[] {
+  return db.categories;
 }
 
 // Refresh the snapshot when the tab regains focus so other sessions'

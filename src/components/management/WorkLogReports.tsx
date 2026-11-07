@@ -22,7 +22,7 @@ function defaultFilter(): RangeFilter {
     toKey: getZonedDateKey(new Date()),
     employeeId: "all",
     location: "all",
-    statusAtEntry: "all",
+    taskStatus: "all",
     hours: "all",
   };
 }
@@ -70,7 +70,7 @@ export function WorkLogReports() {
     (datesActive ? 1 : 0) +
     (filter.employeeId !== "all" ? 1 : 0) +
     (filter.location !== "all" ? 1 : 0) +
-    (filter.statusAtEntry !== "all" ? 1 : 0) +
+    (filter.taskStatus !== "all" ? 1 : 0) +
     (filter.hours !== "all" ? 1 : 0);
 
   const chips: { key: string; label: string; clear: () => void }[] = [];
@@ -96,11 +96,12 @@ export function WorkLogReports() {
       clear: () => update({ location: "all" }),
     });
   }
-  if (filter.statusAtEntry !== "all") {
+  if (filter.taskStatus && filter.taskStatus !== "all") {
+    const status = filter.taskStatus;
     chips.push({
       key: "status",
-      label: TASK_STATUS_LABELS[filter.statusAtEntry as TaskStatus],
-      clear: () => update({ statusAtEntry: "all" }),
+      label: TASK_STATUS_LABELS[status],
+      clear: () => update({ taskStatus: "all" }),
     });
   }
   if (filter.hours !== "all") {
@@ -198,7 +199,7 @@ export function WorkLogReports() {
                 <th className="px-4 py-3 font-medium">Task</th>
                 <th className="px-4 py-3 font-medium">Time</th>
                 <th className="px-4 py-3 font-medium">Location</th>
-                <th className="px-4 py-3 font-medium">Status at entry</th>
+                <th className="px-4 py-3 font-medium">Task status</th>
                 <th className="px-4 py-3 font-medium">Duration</th>
                 <th className="px-4 py-3 font-medium">Overtime</th>
               </tr>
@@ -217,7 +218,7 @@ export function WorkLogReports() {
                     <td className="px-4 py-3">{task?.title ?? "—"}</td>
                     <td className="px-4 py-3">{formatTime(e.startAt)}–{formatTime(e.endAt)}</td>
                     <td className="px-4 py-3">{WORK_LOCATION_LABELS[e.workLocation]}</td>
-                    <td className="px-4 py-3"><StatusBadge status={e.statusAtEntry} /></td>
+                    <td className="px-4 py-3"><StatusBadge status={task?.currentStatus ?? "ongoing"} /></td>
                     <td className="px-4 py-3">{formatMinutes(durationMinutes(e.startAt, e.endAt))}</td>
                     <td className="px-4 py-3">{e.overtimeMinutes > 0 ? formatMinutes(e.overtimeMinutes) : "—"}</td>
                   </tr>
@@ -285,8 +286,8 @@ function FilterFields({
           <option value="other">{WORK_LOCATION_LABELS.other}</option>
         </select>
       </label>
-      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Task status at entry
-        <select value={value.statusAtEntry} onChange={(e) => onChange({ statusAtEntry: e.target.value as TaskStatus | "all" })} className={selectClass}>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Task status
+        <select value={value.taskStatus ?? "all"} onChange={(e) => onChange({ taskStatus: e.target.value as TaskStatus | "all" })} className={selectClass}>
           <option value="all">All</option>
           {(Object.keys(TASK_STATUS_LABELS) as TaskStatus[]).map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}
         </select>

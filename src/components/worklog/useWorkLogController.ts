@@ -4,9 +4,12 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { getSchedulePeriod, getZonedDateKey, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { TASK_STATUS_LABELS } from "@/lib/worklog/config";
 import {
+  addProgressUpdate,
   addWorkEntry,
+  createSubtask,
   createTask,
   deleteWorkEntry,
+  editProgressUpdate,
   editWorkEntry,
   endBreak,
   getDatabaseSnapshot,
@@ -14,11 +17,18 @@ import {
   getSessionEmployeeId,
   startBreak,
   subscribeToDatabase,
+  updateBreak,
+  updateSubtask,
+  updateSubtaskStatus,
+  updateTask,
+  updateTaskStatus,
   type EntryInput,
+  type MutationResult,
 } from "@/lib/worklog/repository";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { dateKeyOf, formatTime } from "@/lib/worklog/time";
-import { getDaySummary, getOpenTasks, getTaskById } from "@/lib/worklog/selectors";
+import { breakDeadline } from "@/lib/worklog/validation";
+import { getDaySummary, getOpenTasks, getSubtasksForTask, getTaskById } from "@/lib/worklog/selectors";
 import type { TaskStatus, WorkEntry, WorkLocation } from "@/lib/worklog/types";
 import {
   getTaskStatusCounts,
@@ -45,6 +55,9 @@ export function useWorkLogController() {
   const initialOpenTasks = getOpenTasks(getServerSnapshot(), meId);
   const [taskChoice, setTaskChoice] = useState(initialOpenTasks[0]?.id ?? "");
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskCategory, setNewTaskCategory] = useState("");
+  const [newTaskNote, setNewTaskNote] = useState("");
+  const [newTaskSubtasks, setNewTaskSubtasks] = useState<string[]>([]);
   const [description, setDescription] = useState("");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
@@ -57,8 +70,7 @@ export function useWorkLogController() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDateKey, setEditingDateKey] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState("");
-  const [statusChoice, setStatusChoice] = useState<TaskStatus>("ongoing");
-  const [statusReason, setStatusReason] = useState("");
+  const [subtaskChoice, setSubtaskChoice] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [recordsOpen, setRecordsOpen] = useState(false);
@@ -69,6 +81,8 @@ export function useWorkLogController() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
+  const [taskDetailsTaskId, setTaskDetailsTaskId] = useState<string | null>(null);
   const formRef = useRef<HTMLElement>(null);
   const submissionLock = useRef(false);
 
@@ -88,8 +102,14 @@ export function useWorkLogController() {
     [db, meId, recordsDateKey, now]
   );
   const openTasks = getOpenTasks(db, meId);
+  const employeeTasks = useMemo(
+    () => db.tasks.filter((task) => task.employeeId === meId).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [db.tasks, meId]
+  );
   const activeBreak = db.breaks.find((brk) => brk.employeeId === meId && brk.endAt === null) ?? null;
   const selectedTask = taskChoice && taskChoice !== NEW_TASK ? getTaskById(db, taskChoice) : undefined;
+  const selectedTaskSubtasks = selectedTask ? getSubtasksForTask(db, selectedTask.id) : [];
+  const detailTask = taskDetailsTaskId ? getTaskById(db, taskDetailsTaskId) : undefined;
   const slots = useMemo(
     () => makeWorkSlots(todayKey, db.entries.filter((entry) => entry.employeeId === meId), db.breaks.filter((brk) => brk.employeeId === meId), now),
     [db.entries, db.breaks, meId, todayKey, now]
@@ -117,6 +137,7 @@ export function useWorkLogController() {
         : "Outside scheduled hours";
   const isHistoricalEdit = Boolean(editingDateKey && editingDateKey !== todayKey);
   const effectiveTaskMode = openTasks.length === 0 && !editingId ? "new" : taskMode;
+  const categories = db.categories;
 
   const nowMs = now.getTime();
   const nextAvailableSlot =
@@ -144,9 +165,11 @@ export function useWorkLogController() {
   }, [notice]);
 
   useEffect(() => {
-    if (!recordsOpen) return;
+    if (!recordsOpen && !taskDetailsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setRecordsOpen(false);
+      if (event.key !== "Escape") return;
+      if (taskDetailsOpen) closeTaskDetails();
+      else setRecordsOpen(false);
     };
     document.addEventListener("keydown", closeOnEscape);
     document.body.style.overflow = "hidden";
@@ -154,7 +177,7 @@ export function useWorkLogController() {
       document.removeEventListener("keydown", closeOnEscape);
       document.body.style.overflow = "";
     };
-  }, [recordsOpen]);
+  }, [recordsOpen, taskDetailsOpen]);
 
   function lockAutoSlot() {
     setSlotLocked(true);
@@ -165,6 +188,9 @@ export function useWorkLogController() {
     setTaskMode(availableTasks.length ? "continue" : "new");
     setTaskChoice(availableTasks[0]?.id ?? "");
     setNewTaskTitle("");
+    setNewTaskCategory("");
+    setNewTaskNote("");
+    setNewTaskSubtasks([]);
     setTaskSearch("");
     setDescription("");
     setEvidenceLink("");
@@ -175,8 +201,7 @@ export function useWorkLogController() {
     setEditingId(null);
     setEditingDateKey(null);
     setSelectedSlot("");
-    setStatusChoice("ongoing");
-    setStatusReason("");
+    setSubtaskChoice("");
     setLocation("office");
     setError(null);
   }
@@ -187,6 +212,7 @@ export function useWorkLogController() {
     setEditingDateKey(dayKey);
     setTaskMode("continue");
     setTaskChoice(entry.taskId);
+    setSubtaskChoice(entry.subtaskId ?? "");
     setDescription(entry.description);
     setStartTime(formatTime(entry.startAt));
     setEndTime(formatTime(entry.endAt));
@@ -197,7 +223,6 @@ export function useWorkLogController() {
     setShowTimeAdjustment(false);
     setSlotLocked(true);
     setSelectedSlot("");
-    setStatusChoice(entry.statusAtEntry);
     setError(null);
     setRecordsOpen(false);
     window.setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
@@ -206,10 +231,13 @@ export function useWorkLogController() {
   function selectTaskMode(mode: "continue" | "new") {
     setTaskMode(mode);
     setTaskChoice(mode === "continue" ? openTasks[0]?.id ?? "" : NEW_TASK);
-    const task = mode === "continue" ? openTasks[0] : undefined;
-    setStatusChoice(task && task.currentStatus !== "not_started" ? task.currentStatus : "ongoing");
-    setStatusReason("");
+    setSubtaskChoice("");
     setError(null);
+  }
+
+  function chooseTask(taskId: string) {
+    setTaskChoice(taskId);
+    setSubtaskChoice("");
   }
 
   function selectSlot(slot: { key: string; start: string; end: string; available: boolean }) {
@@ -220,6 +248,18 @@ export function useWorkLogController() {
     setShowTimeAdjustment(false);
     setIsReportedOvertime(false);
     setError(null);
+  }
+
+  function addNewTaskSubtask() {
+    setNewTaskSubtasks((current) => [...current, ""]);
+  }
+
+  function updateNewTaskSubtask(index: number, value: string) {
+    setNewTaskSubtasks((current) => current.map((title, itemIndex) => (itemIndex === index ? value : title)));
+  }
+
+  function removeNewTaskSubtask(index: number) {
+    setNewTaskSubtasks((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   function submitEntry() {
@@ -255,7 +295,15 @@ export function useWorkLogController() {
 
     let taskId = taskChoice;
     if (effectiveTaskMode === "new") {
-      const created = createTask({ employeeId: meId, title: newTaskTitle });
+      const created = createTask({
+        employeeId: meId,
+        title: newTaskTitle,
+        categoryId: newTaskCategory || undefined,
+        initialNote: newTaskNote || undefined,
+        subtasks: newTaskSubtasks
+          .filter((title) => title.trim())
+          .map((title) => ({ title })),
+      });
       if (!created.ok) {
         setError(created.message);
         return;
@@ -263,19 +311,19 @@ export function useWorkLogController() {
       taskId = created.taskId;
       setTaskChoice(taskId);
       setTaskMode("continue");
+      setSubtaskChoice("");
     }
 
     const input: EntryInput = {
       employeeId: meId,
       taskId,
+      subtaskId: subtaskChoice || undefined,
       description,
       startAt: toLagosIso(effectiveDateKey, startTime),
       endAt: toLagosIso(effectiveDateKey, endTime),
       workLocation: location,
       evidenceLink: evidenceLink || undefined,
       isReportedOvertime,
-      statusAfterEntry: editingId ? undefined : statusChoice,
-      statusReason: statusReason || undefined,
     };
     const result = editingId ? editWorkEntry(editingId, input) : addWorkEntry(input);
     if (!result.ok) {
@@ -306,15 +354,22 @@ export function useWorkLogController() {
     }
   }
 
-  function handleEndBreak() {
+  function handleEndBreak(auto = false) {
     if (!activeBreak) return;
     const result = endBreak(activeBreak.id);
     if (!result.ok) setError(result.message);
     else {
       setError(null);
-      setNotice("Break ended.");
+      setNotice(auto ? "Break ended automatically (daily allowance or end of workday reached)." : "Break ended.");
     }
   }
+
+  useEffect(() => {
+    if (!activeBreak || now.getTime() < breakDeadline(db.breaks, activeBreak).getTime()) return;
+    const timer = window.setTimeout(() => handleEndBreak(true), 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBreak, now]);
 
   function openRecords() {
     setRecordsOpen(true);
@@ -322,6 +377,16 @@ export function useWorkLogController() {
     setRecordsDate(todayKey);
     setExportFrom(todayKey);
     setExportTo(todayKey);
+  }
+
+  function openTaskDetails(taskId?: string) {
+    setTaskDetailsTaskId(taskId ?? null);
+    setTaskDetailsOpen(true);
+  }
+
+  function closeTaskDetails() {
+    setTaskDetailsOpen(false);
+    setTaskDetailsTaskId(null);
   }
 
   async function exportRecords() {
@@ -342,6 +407,86 @@ export function useWorkLogController() {
     } finally {
       setExporting(false);
     }
+  }
+
+  /* Task and subtask actions are returned to dialogs so they can show inline errors. */
+  function saveTask(input: {
+    taskId: string;
+    title: string;
+    description?: string;
+    categoryId?: string | null;
+  }): MutationResult {
+    const result = updateTask(input);
+    if (result.ok) setNotice("Task details saved.");
+    return result;
+  }
+
+  function changeTaskStatus(
+    taskId: string,
+    status: TaskStatus,
+    reason?: string,
+    note?: string
+  ): MutationResult {
+    const result = updateTaskStatus(taskId, status, reason, note);
+    if (result.ok) setNotice(`Task moved to ${TASK_STATUS_LABELS[status]}.`);
+    return result;
+  }
+
+  function addSubtask(taskId: string, title: string, description?: string): MutationResult {
+    const result = createSubtask({ taskId, title, description });
+    if (result.ok) setNotice("Subtask added.");
+    return result;
+  }
+
+  function saveSubtask(input: {
+    subtaskId: string;
+    title: string;
+    description?: string;
+  }): MutationResult {
+    const result = updateSubtask(input);
+    if (result.ok) setNotice("Subtask saved.");
+    return result;
+  }
+
+  function changeSubtaskStatus(
+    subtaskId: string,
+    status: TaskStatus,
+    reason?: string
+  ): MutationResult {
+    const result = updateSubtaskStatus(subtaskId, status, reason);
+    if (result.ok) setNotice(`Subtask moved to ${TASK_STATUS_LABELS[status]}.`);
+    return result;
+  }
+
+  function addProgress(taskId: string, subtaskId: string | null, body: string): MutationResult {
+    const result = addProgressUpdate({ taskId, subtaskId, body });
+    if (result.ok) setNotice("Progress update added.");
+    return result;
+  }
+
+  function saveProgress(
+    progressUpdateId: string,
+    body: string,
+    revisionReason?: string
+  ): MutationResult {
+    const result = editProgressUpdate({ progressUpdateId, body, revisionReason });
+    if (result.ok) setNotice("Progress update edited. The previous version is kept.");
+    return result;
+  }
+
+  function changeBreak(
+    breakId: string,
+    dateKey: string,
+    start: string,
+    end: string | null
+  ): MutationResult {
+    const result = updateBreak({
+      breakId,
+      startAt: toLagosIso(dateKey, start),
+      endAt: end ? toLagosIso(dateKey, end) : null,
+    });
+    if (result.ok) setNotice("Break updated.");
+    return result;
   }
 
   const workMinutes = Math.min(summary.normalMinutes, SCHEDULED_MINUTES);
@@ -370,8 +515,11 @@ export function useWorkLogController() {
     recordsSummary,
     recordsDateKey,
     openTasks,
+    employeeTasks,
     activeBreak,
     selectedTask,
+    selectedTaskSubtasks,
+    detailTask,
     slots,
     nextAvailableSlot,
     matchingTasks,
@@ -380,9 +528,18 @@ export function useWorkLogController() {
     setTaskSearch,
     taskMode,
     taskChoice,
-    setTaskChoice,
+    setTaskChoice: chooseTask,
     newTaskTitle,
     setNewTaskTitle,
+    newTaskCategory,
+    setNewTaskCategory,
+    newTaskNote,
+    setNewTaskNote,
+    newTaskSubtasks,
+    addNewTaskSubtask,
+    updateNewTaskSubtask,
+    removeNewTaskSubtask,
+    categories,
     description,
     setDescription,
     startTime,
@@ -405,10 +562,8 @@ export function useWorkLogController() {
     editingDateKey,
     selectedSlot,
     setSelectedSlot,
-    statusChoice,
-    setStatusChoice,
-    statusReason,
-    setStatusReason,
+    subtaskChoice,
+    setSubtaskChoice,
     error,
     setError,
     notice,
@@ -430,6 +585,8 @@ export function useWorkLogController() {
     workdayStatus,
     isHistoricalEdit,
     effectiveTaskMode,
+    taskDetailsOpen,
+    taskDetailsTaskId,
     resetForm,
     beginEdit,
     deleteEntry,
@@ -437,9 +594,19 @@ export function useWorkLogController() {
     selectSlot,
     submitEntry,
     handleStartBreak,
-    handleEndBreak,
+    handleEndBreak: () => handleEndBreak(),
     openRecords,
     exportRecords,
+    openTaskDetails,
+    closeTaskDetails,
+    saveTask,
+    changeTaskStatus,
+    addSubtask,
+    saveSubtask,
+    changeSubtaskStatus,
+    addProgress,
+    saveProgress,
+    changeBreak,
     coveredMinutes,
     remainingMinutes,
     progressWorkWidth,

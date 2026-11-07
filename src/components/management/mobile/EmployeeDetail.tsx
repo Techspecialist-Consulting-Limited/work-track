@@ -95,7 +95,7 @@ export function EmployeeDetailMobile({
 
   const completedTasks = useMemo(() => {
     return db.tasks.filter(
-      (t) => t.employeeId === employee.id && t.currentStatus === "completed" && t.completedAt && dateKeyOf(t.completedAt) === viewDate
+      (t) => t.employeeId === employee.id && t.currentStatus === "done" && t.completedAt && dateKeyOf(t.completedAt) === viewDate
     );
   }, [db.tasks, employee.id, viewDate]);
 
@@ -505,7 +505,7 @@ function WorkRow({ db, entry }: { db: WorkLogDatabase; entry: WorkEntry }) {
             {isOvertime ? ` · ${formatMinutes(entry.overtimeMinutes)} OT` : ""}
             {entry.isReportedOvertime ? " · Reported" : ""}
           </span>
-          <StatusBadge status={entry.statusAtEntry} className="shrink-0" />
+          <StatusBadge status={task?.currentStatus ?? "ongoing"} className="shrink-0" />
         </p>
       </div>
       <span className="shrink-0 text-[12px] font-bold text-[#17172B]">
@@ -595,7 +595,7 @@ function OvertimeTab({
                       {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
                       {entry.isReportedOvertime ? " · Reported" : ""}
                     </span>
-                    <StatusBadge status={entry.statusAtEntry} className="shrink-0" />
+                    <StatusBadge status={task?.currentStatus ?? "ongoing"} className="shrink-0" />
                   </p>
                 </div>
                 <span className="shrink-0 text-[12px] font-bold text-[#B45309]">

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Coffee, Pencil, Save, Trash2, X } from "lucide-react";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
-import { getTaskById } from "@/lib/worklog/selectors";
+import { getSubtaskById, getTaskById } from "@/lib/worklog/selectors";
 import { dateKeyAfter } from "./shared";
 import { StatusBadge } from "./StatusBadge";
 import type { WorkLogController } from "./useWorkLogController";
@@ -15,6 +15,8 @@ const DIALOG_INPUT_CLASS =
 
 export function RecordsDialog({ c }: { c: WorkLogController }) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [breakEdit, setBreakEdit] = useState<{ id: string; start: string; end: string } | null>(null);
+  const [breakError, setBreakError] = useState<string | null>(null);
   if (!c.recordsOpen) return null;
   const { recordsSummary, recordsDateKey, todayKey, timeline, taskStatusCounts } = c;
 
@@ -127,9 +129,15 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                           <p className="mt-0.5 break-words text-[13px] font-semibold text-[#17172F]">
                             {getTaskById(c.db, item.entry.taskId)?.title ?? "Task"}
                           </p>
+                          {item.entry.subtaskId ? (
+                            <p className="text-[11px] font-medium text-[#777A91]">
+                              Subtask: {getSubtaskById(c.db, item.entry.subtaskId)?.title ?? "Removed subtask"}
+                            </p>
+                          ) : null}
                           <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-4 text-[#53506B]">{item.entry.description}</p>
-                          <p className="mt-1.5 text-[11px] text-[#777A91]">
-                            {WORK_LOCATION_LABELS[item.entry.workLocation]} · <StatusBadge status={item.entry.statusAtEntry} />
+                          <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-[#777A91]">
+                            {WORK_LOCATION_LABELS[item.entry.workLocation]} · Task status{" "}
+                            <StatusBadge status={getTaskById(c.db, item.entry.taskId)?.currentStatus ?? "ongoing"} />
                             {item.entry.overtimeMinutes > 0 ? ` · Overtime ${formatMinutes(item.entry.overtimeMinutes)}` : ""}
                             {item.entry.isReportedOvertime ? " · Reported overtime" : ""}
                           </p>
@@ -179,14 +187,92 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                       </div>
                     </li>
                   ) : (
-                    <li key={item.brk.id} className="flex items-center justify-between rounded-xl border border-[#F6D99A] bg-[#FFF9ED] p-3">
-                      <div>
-                        <p className="text-sm font-semibold text-[#8A5A00]">Break</p>
-                        <p className="mt-1 text-xs text-[#9A742C]">
-                          {formatTime(item.brk.startAt)} – {item.brk.endAt ? formatTime(item.brk.endAt) : "In progress"}
-                        </p>
-                      </div>
-                      <Coffee size={17} className="text-[#F59E0B]" aria-hidden="true" />
+                    <li key={item.brk.id} className="rounded-xl border border-[#F6D99A] bg-[#FFF9ED] p-3">
+                      {breakEdit?.id === item.brk.id ? (
+                        <div className="space-y-2">
+                          <p className="text-sm font-semibold text-[#8A5A00]">Edit break</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-[#8A5A00]">
+                              Start
+                              <input
+                                type="time"
+                                value={breakEdit.start}
+                                onChange={(event) => setBreakEdit({ ...breakEdit, start: event.target.value })}
+                                className={DIALOG_INPUT_CLASS}
+                              />
+                            </label>
+                            <label className="text-[11px] font-semibold text-[#8A5A00]">
+                              End
+                              <input
+                                type="time"
+                                value={breakEdit.end}
+                                onChange={(event) => setBreakEdit({ ...breakEdit, end: event.target.value })}
+                                className={DIALOG_INPUT_CLASS}
+                              />
+                            </label>
+                          </div>
+                          {breakError ? <p role="alert" className="text-xs text-[#B43A3A]">{breakError}</p> : null}
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBreakEdit(null);
+                                setBreakError(null);
+                              }}
+                              className="min-h-9 rounded-lg px-3 text-xs font-semibold text-[#8A5A00]"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const result = c.changeBreak(
+                                  item.brk.id,
+                                  recordsDateKey,
+                                  breakEdit.start,
+                                  breakEdit.end || null
+                                );
+                                if (!result.ok) {
+                                  setBreakError(result.message);
+                                  return;
+                                }
+                                setBreakEdit(null);
+                                setBreakError(null);
+                              }}
+                              className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-[#F59E0B] px-3 text-xs font-semibold text-white hover:bg-[#DB8A08]"
+                            >
+                              <Save size={13} aria-hidden="true" /> Save break
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-[#8A5A00]">Break</p>
+                            <p className="mt-1 text-xs text-[#9A742C]">
+                              {formatTime(item.brk.startAt)} – {item.brk.endAt ? formatTime(item.brk.endAt) : "In progress"}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-0.5">
+                            <button
+                              type="button"
+                              aria-label="Edit break"
+                              onClick={() => {
+                                setBreakEdit({
+                                  id: item.brk.id,
+                                  start: formatTime(item.brk.startAt),
+                                  end: item.brk.endAt ? formatTime(item.brk.endAt) : "",
+                                });
+                                setBreakError(null);
+                              }}
+                              className="grid h-9 w-9 place-items-center rounded-lg text-[#9A742C] transition hover:bg-[#FDEBC8] hover:text-[#8A5A00] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B]"
+                            >
+                              <Pencil size={15} aria-hidden="true" />
+                            </button>
+                            <Coffee size={17} className="text-[#F59E0B]" aria-hidden="true" />
+                          </div>
+                        </div>
+                      )}
                     </li>
                   )
                 )}
@@ -207,7 +293,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
               <SummaryStat label="Office" value={formatMinutes(recordsSummary.officeMinutes)} />
               <SummaryStat label="Home" value={formatMinutes(recordsSummary.homeMinutes)} />
               <SummaryStat label="Entries" value={String(recordsSummary.entries.length)} />
-              <SummaryStat label="Tasks done" value={String(taskStatusCounts.completed)} />
+              <SummaryStat label="Tasks done" value={String(taskStatusCounts.done)} />
               <SummaryStat label="Tasks ongoing" value={String(taskStatusCounts.ongoing)} />
               <SummaryStat label="Tasks blocked" value={String(taskStatusCounts.blocked)} />
               <SummaryStat label="Tasks dropped" value={String(taskStatusCounts.dropped)} />

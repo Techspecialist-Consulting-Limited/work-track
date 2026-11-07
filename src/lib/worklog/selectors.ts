@@ -1,6 +1,7 @@
 import { WORKTRACK_SCHEDULE, getZonedDateKey, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
 import { WORKLOG_RULES } from "./config";
 import { dateKeyOf, durationMinutes } from "./time";
+import { breakDeadline } from "./validation";
 import type { BreakEntry, Employee, EmployeeId, Task, WorkEntry, WorkLocation, WorkLogDatabase } from "./types";
 
 export const SHIFT_MINUTES =
@@ -27,8 +28,8 @@ export interface DaySummary {
   isFuture: boolean;
 }
 
-function breakMinutesOf(brk: BreakEntry, now: Date): number {
-  const end = brk.endAt ? new Date(brk.endAt) : now;
+function breakMinutesOf(brk: BreakEntry, now: Date, dayBreaks: BreakEntry[]): number {
+  const end = brk.endAt ? new Date(brk.endAt) : new Date(Math.min(now.getTime(), breakDeadline(dayBreaks, brk).getTime()));
   return Math.max(0, Math.round((end.getTime() - new Date(brk.startAt).getTime()) / 60_000));
 }
 
@@ -63,7 +64,7 @@ export function getDaySummary(db: WorkLogDatabase, employeeId: EmployeeId, dateK
   const otherMinutes = entries
     .filter((e) => e.workLocation === "other")
     .reduce((total, e) => total + durationMinutes(e.startAt, e.endAt), 0);
-  const breakMinutes = breaks.reduce((total, b) => total + breakMinutesOf(b, now), 0);
+  const breakMinutes = breaks.reduce((total, b) => total + breakMinutesOf(b, now, breaks), 0);
 
   let shiftMinutes = 0;
   if (isWorkingDay && !isFuture) {
@@ -102,12 +103,44 @@ export function getDaySummary(db: WorkLogDatabase, employeeId: EmployeeId, dateK
 
 export function getOpenTasks(db: WorkLogDatabase, employeeId: EmployeeId): Task[] {
   return db.tasks.filter(
-    (t) => t.employeeId === employeeId && (t.currentStatus === "not_started" || t.currentStatus === "ongoing" || t.currentStatus === "blocked")
+    (t) => t.employeeId === employeeId && (t.currentStatus === "ongoing" || t.currentStatus === "blocked")
   );
+}
+
+export function getTasksForEmployee(db: WorkLogDatabase, employeeId: EmployeeId): Task[] {
+  return db.tasks.filter((t) => t.employeeId === employeeId);
+}
+
+export function getSubtasksForTask(db: WorkLogDatabase, taskId: string) {
+  return db.subtasks
+    .filter((subtask) => subtask.taskId === taskId)
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.createdAt.localeCompare(b.createdAt));
+}
+
+export function getProgressUpdatesForTask(db: WorkLogDatabase, taskId: string) {
+  return db.progressUpdates
+    .filter((update) => update.taskId === taskId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getSubtaskStatusHistory(db: WorkLogDatabase, subtaskId: string) {
+  return db.statusHistory
+    .filter((event) => event.subtaskId === subtaskId)
+    .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
+}
+
+export function getTaskStatusHistory(db: WorkLogDatabase, taskId: string) {
+  return db.statusHistory
+    .filter((event) => event.taskId === taskId && !event.subtaskId)
+    .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
 }
 
 export function getTaskById(db: WorkLogDatabase, taskId: string): Task | undefined {
   return db.tasks.find((t) => t.id === taskId);
+}
+
+export function getSubtaskById(db: WorkLogDatabase, subtaskId: string) {
+  return db.subtasks.find((subtask) => subtask.id === subtaskId);
 }
 
 export function getEmployee(db: WorkLogDatabase, employeeId: EmployeeId): Employee | undefined {
@@ -119,18 +152,20 @@ export interface RangeFilter {
   toKey: string;
   employeeId?: EmployeeId | "all";
   location?: WorkLocation | "all";
-  statusAtEntry?: Task["currentStatus"] | "all";
+  /** Filter by the task's current status (work entries do not own status). */
+  taskStatus?: Task["currentStatus"] | "all";
   hours?: "all" | "normal" | "overtime";
 }
 
 export function filterEntries(db: WorkLogDatabase, filter: RangeFilter): WorkEntry[] {
+  const taskStatuses = new Map(db.tasks.map((task) => [task.id, task.currentStatus]));
   return db.entries
     .filter((e) => {
       const key = dateKeyOf(e.startAt);
       if (key < filter.fromKey || key > filter.toKey) return false;
       if (filter.employeeId && filter.employeeId !== "all" && e.employeeId !== filter.employeeId) return false;
       if (filter.location && filter.location !== "all" && e.workLocation !== filter.location) return false;
-      if (filter.statusAtEntry && filter.statusAtEntry !== "all" && e.statusAtEntry !== filter.statusAtEntry) return false;
+      if (filter.taskStatus && filter.taskStatus !== "all" && taskStatuses.get(e.taskId) !== filter.taskStatus) return false;
       if (filter.hours === "normal" && e.normalMinutes === 0) return false;
       if (filter.hours === "overtime" && e.overtimeMinutes === 0) return false;
       return true;
