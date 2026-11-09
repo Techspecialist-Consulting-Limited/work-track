@@ -5,7 +5,11 @@ export type EntryId = string;
 export type BreakId = string;
 export type ProgressUpdateId = string;
 
-export type WorkLocation = "office" | "home" | "other";
+/** "unknown" is a recorded absence of data, not a guess between office/home. */
+export type WorkLocation = "office" | "home" | "other" | "unknown";
+
+export type RecoveryStatusSource = "recorded" | "recovery_default";
+export type RecoveryDetailsSource = "recorded" | "recovery_default" | "recovery_provisional";
 
 /** The four valid task/subtask statuses. There is deliberately no "not started". */
 export type TaskStatus = "ongoing" | "done" | "blocked" | "dropped";
@@ -48,6 +52,12 @@ export interface Task {
     note?: string;
     reviewedAt: string;
   };
+  archivedAt?: string;
+  /** "recovery_default" means the status was never recorded; show it as unverified. */
+  statusSource?: RecoveryStatusSource;
+  /** "recovery_provisional" means the details were reconstructed, not recorded. */
+  detailsSource?: RecoveryDetailsSource;
+  recoveryImportId?: string;
 }
 
 export interface Subtask {
@@ -61,6 +71,10 @@ export interface Subtask {
   updatedAt: string;
   statusUpdatedAt: string;
   completedAt?: string;
+  archivedAt?: string;
+  statusSource?: RecoveryStatusSource;
+  detailsSource?: RecoveryDetailsSource;
+  recoveryImportId?: string;
 }
 
 export interface ProgressUpdateRevision {
@@ -116,6 +130,7 @@ export interface WorkEntry {
   createdAt: string;
   updatedAt?: string;
   revisions: WorkEntryRevision[];
+  recoveryImportId?: string;
 }
 
 export interface BreakEntry {
@@ -126,6 +141,7 @@ export interface BreakEntry {
   endAt: string | null;
   createdAt: string;
   updatedAt?: string;
+  recoveryImportId?: string;
 }
 
 export interface StatusHistoryEvent {

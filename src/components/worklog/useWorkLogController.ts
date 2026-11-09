@@ -29,7 +29,7 @@ import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { dateKeyOf, formatTime } from "@/lib/worklog/time";
 import { breakDeadline } from "@/lib/worklog/validation";
 import { getDaySummary, getOpenTasks, getSubtasksForTask, getTaskById } from "@/lib/worklog/selectors";
-import type { TaskStatus, WorkEntry, WorkLocation } from "@/lib/worklog/types";
+import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib/worklog/types";
 import {
   getTaskStatusCounts,
   makeWorkSlots,
@@ -43,6 +43,12 @@ const subscribeNoop = () => () => {};
 const getClientMounted = () => true;
 const getServerMounted = () => false;
 
+/** Open tasks that still have at least one active work entry. */
+function openTasksWithEntries(db: WorkLogDatabase, employeeId: string) {
+  const ids = new Set(db.entries.map((entry) => entry.taskId));
+  return getOpenTasks(db, employeeId).filter((task) => ids.has(task.id));
+}
+
 export function useWorkLogController() {
   const db = useSyncExternalStore(subscribeToDatabase, getDatabaseSnapshot, getServerSnapshot);
   const meId = getSessionEmployeeId() ?? db.employees[0]?.id ?? "";
@@ -50,11 +56,12 @@ export function useWorkLogController() {
   const [now, setNow] = useState<Date>(() => new Date());
   const [taskSearch, setTaskSearch] = useState("");
   const [taskMode, setTaskMode] = useState<"continue" | "new">(() =>
-    getOpenTasks(getServerSnapshot(), meId).length ? "continue" : "new"
+    openTasksWithEntries(getServerSnapshot(), meId).length ? "continue" : "new"
   );
-  const initialOpenTasks = getOpenTasks(getServerSnapshot(), meId);
+  const initialOpenTasks = openTasksWithEntries(getServerSnapshot(), meId);
   const [taskChoice, setTaskChoice] = useState(initialOpenTasks[0]?.id ?? "");
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskDescription, setNewTaskDescription] = useState("");
   const [newTaskCategory, setNewTaskCategory] = useState("");
   const [newTaskNote, setNewTaskNote] = useState("");
   const [newTaskSubtasks, setNewTaskSubtasks] = useState<string[]>([]);
@@ -83,6 +90,7 @@ export function useWorkLogController() {
   const [submitting, setSubmitting] = useState(false);
   const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
   const [taskDetailsTaskId, setTaskDetailsTaskId] = useState<string | null>(null);
+  const [progressUpdateTaskId, setProgressUpdateTaskId] = useState<string | null>(null);
   const formRef = useRef<HTMLElement>(null);
   const submissionLock = useRef(false);
 
@@ -101,10 +109,15 @@ export function useWorkLogController() {
     () => getDaySummary(db, meId, recordsDateKey, now),
     [db, meId, recordsDateKey, now]
   );
-  const openTasks = getOpenTasks(db, meId);
+  const taskIdsWithEntries = useMemo(() => new Set(db.entries.map((entry) => entry.taskId)), [db.entries]);
+  const openTasks = openTasksWithEntries(db, meId);
   const employeeTasks = useMemo(
-    () => db.tasks.filter((task) => task.employeeId === meId).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    [db.tasks, meId]
+    () =>
+      db.tasks
+        .filter((task) => task.employeeId === meId && taskIdsWithEntries.has(task.id))
+        .slice()
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [db.tasks, meId, taskIdsWithEntries]
   );
   const activeBreak = db.breaks.find((brk) => brk.employeeId === meId && brk.endAt === null) ?? null;
   const selectedTask = taskChoice && taskChoice !== NEW_TASK ? getTaskById(db, taskChoice) : undefined;
@@ -165,10 +178,11 @@ export function useWorkLogController() {
   }, [notice]);
 
   useEffect(() => {
-    if (!recordsOpen && !taskDetailsOpen) return;
+    if (!recordsOpen && !taskDetailsOpen && !progressUpdateTaskId) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (taskDetailsOpen) closeTaskDetails();
+      if (progressUpdateTaskId) closeUpdateProgress();
+      else if (taskDetailsOpen) closeTaskDetails();
       else setRecordsOpen(false);
     };
     document.addEventListener("keydown", closeOnEscape);
@@ -177,17 +191,18 @@ export function useWorkLogController() {
       document.removeEventListener("keydown", closeOnEscape);
       document.body.style.overflow = "";
     };
-  }, [recordsOpen, taskDetailsOpen]);
+  }, [recordsOpen, taskDetailsOpen, progressUpdateTaskId]);
 
   function lockAutoSlot() {
     setSlotLocked(true);
   }
 
   function resetForm() {
-    const availableTasks = getOpenTasks(getDatabaseSnapshot(), meId);
+    const availableTasks = openTasksWithEntries(getDatabaseSnapshot(), meId);
     setTaskMode(availableTasks.length ? "continue" : "new");
     setTaskChoice(availableTasks[0]?.id ?? "");
     setNewTaskTitle("");
+    setNewTaskDescription("");
     setNewTaskCategory("");
     setNewTaskNote("");
     setNewTaskSubtasks([]);
@@ -298,6 +313,7 @@ export function useWorkLogController() {
       const created = createTask({
         employeeId: meId,
         title: newTaskTitle,
+        description: newTaskDescription || undefined,
         categoryId: newTaskCategory || undefined,
         initialNote: newTaskNote || undefined,
         subtasks: newTaskSubtasks
@@ -387,6 +403,14 @@ export function useWorkLogController() {
   function closeTaskDetails() {
     setTaskDetailsOpen(false);
     setTaskDetailsTaskId(null);
+  }
+
+  function openUpdateProgress(taskId: string) {
+    setProgressUpdateTaskId(taskId);
+  }
+
+  function closeUpdateProgress() {
+    setProgressUpdateTaskId(null);
   }
 
   async function exportRecords() {
@@ -531,6 +555,8 @@ export function useWorkLogController() {
     setTaskChoice: chooseTask,
     newTaskTitle,
     setNewTaskTitle,
+    newTaskDescription,
+    setNewTaskDescription,
     newTaskCategory,
     setNewTaskCategory,
     newTaskNote,
@@ -587,6 +613,9 @@ export function useWorkLogController() {
     effectiveTaskMode,
     taskDetailsOpen,
     taskDetailsTaskId,
+    progressUpdateTaskId,
+    openUpdateProgress,
+    closeUpdateProgress,
     resetForm,
     beginEdit,
     deleteEntry,

@@ -137,6 +137,7 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
         endAt: toIso(row.endAt) ?? null,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
+        recoveryImportId: row.recoveryImportId ?? undefined,
       });
       continue;
     }
@@ -157,6 +158,7 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       revisions: [],
+      recoveryImportId: row.recoveryImportId ?? undefined,
     });
   }
 
@@ -175,6 +177,10 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     statusUpdatedAt: t.statusUpdatedAt.toISOString(),
     completedAt: toIso(t.completedAt),
     managementReview: t.managementReview ?? undefined,
+    archivedAt: toIso(t.archivedAt),
+    statusSource: t.statusSource as Task["statusSource"],
+    detailsSource: t.detailsSource as Task["detailsSource"],
+    recoveryImportId: t.recoveryImportId ?? undefined,
   }));
 
   const mappedSubtasks: Subtask[] = subtaskRows
@@ -190,6 +196,10 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
       updatedAt: row.updatedAt.toISOString(),
       statusUpdatedAt: row.statusUpdatedAt.toISOString(),
       completedAt: toIso(row.completedAt),
+      archivedAt: toIso(row.archivedAt),
+      statusSource: row.statusSource as Subtask["statusSource"],
+      detailsSource: row.detailsSource as Subtask["detailsSource"],
+      recoveryImportId: row.recoveryImportId ?? undefined,
     }));
 
   const mappedProgress: ProgressUpdate[] = progressRows.map((row) => ({

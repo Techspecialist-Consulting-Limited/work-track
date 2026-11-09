@@ -7,6 +7,7 @@ import {
   Coffee,
   House,
   ListChecks,
+  Paperclip,
   Plus,
   Save,
   Square,
@@ -30,7 +31,7 @@ import type { WorkLogController } from "./useWorkLogController";
 const LOCATION_ICONS = {
   office: Building2,
   home: House,
-} satisfies Record<Exclude<WorkLocation, "other">, typeof Building2>;
+} satisfies Record<Exclude<WorkLocation, "other" | "unknown">, typeof Building2>;
 
 export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
   const {
@@ -45,15 +46,10 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     setTaskChoice,
     newTaskTitle,
     setNewTaskTitle,
-    newTaskCategory,
-    setNewTaskCategory,
-    newTaskNote,
-    setNewTaskNote,
     newTaskSubtasks,
     addNewTaskSubtask,
     updateNewTaskSubtask,
     removeNewTaskSubtask,
-    categories,
     selectedTaskSubtasks,
     subtaskChoice,
     setSubtaskChoice,
@@ -103,7 +99,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
 
   return (
     <div className="hidden min-h-dvh bg-[#F7F7FC] px-6 py-3 text-[#17172F] lg:block">
-      <div className="mx-auto flex h-[calc(100dvh-1.5rem)] w-full max-w-[1060px] flex-col">
+      <div className="mx-auto flex h-[calc(100dvh-1.5rem)] w-full max-w-[1240px] flex-col">
         <header className="mb-3 flex min-h-12 shrink-0 items-center justify-between rounded-xl border border-[#E7E6F0] bg-white px-4 shadow-sm">
           <div className="flex items-center gap-2">
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#6C45F5] text-white">
@@ -237,13 +233,13 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
             </div>
           </section>
 
-          <div className="space-y-1">
-            <div className={`grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] items-end gap-4 ${activeBreak ? "hidden" : ""}`}>
-              <section aria-labelledby="task-heading">
-                <h2 id="task-heading" className="mb-1 text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
-                  Task
+          {activeBreak ? null : (
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+              <section aria-labelledby="task-heading" className="rounded-xl border border-[#E7E6F0] bg-[#FCFBFF] p-4">
+                <h2 id="task-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
+                  Task Details
                 </h2>
-                <div className="mb-1.5 grid w-full grid-cols-2 rounded-lg bg-[#F4F3F8] p-0.5">
+                <div className="mt-2 grid w-full grid-cols-2 rounded-lg bg-[#F4F3F8] p-0.5">
                   <button
                     type="button"
                     aria-label="Continue existing task"
@@ -268,7 +264,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                   </button>
                 </div>
                 {effectiveTaskMode === "continue" ? (
-                  <>
+                  <div className="mt-3 space-y-2">
                     <div className="grid grid-cols-2 items-end gap-2">
                       <input
                         value={taskSearch}
@@ -291,308 +287,299 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                       />
                     </div>
                     {selectedTaskSubtasks.length ? (
-                      <div className="mt-1.5">
-                        <WorkTrackSelect
-                          label="Subtask (optional)"
-                          value={subtaskChoice}
-                          disabled={Boolean(editingId)}
-                          onChange={setSubtaskChoice}
-                          options={[
-                            { value: "", label: "No specific subtask", description: "Log against the main task" },
-                            ...selectedTaskSubtasks.map((subtask) => ({
-                              value: subtask.id,
-                              label: subtask.title,
-                              description: subtask.status === "done" ? "Done" : subtask.status === "dropped" ? "Dropped" : "Open",
-                            })),
-                          ]}
-                        />
-                      </div>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="space-y-1.5">
-                    <div className="grid grid-cols-2 items-end gap-2">
-                      <label className="block text-xs font-semibold text-[#53506B]">
-                        Task title
-                        <input
-                          value={newTaskTitle}
-                          maxLength={WORKLOG_RULES.taskTitleMaxLength}
-                          onChange={(event) => setNewTaskTitle(event.target.value)}
-                          placeholder="Give this task a clear name"
-                          className={INPUT_CLASS}
-                        />
-                      </label>
                       <WorkTrackSelect
-                        label="Category (optional)"
-                        value={newTaskCategory}
-                        placeholder="No category"
-                        onChange={setNewTaskCategory}
+                        label="Subtask (optional)"
+                        value={subtaskChoice}
+                        disabled={Boolean(editingId)}
+                        onChange={setSubtaskChoice}
                         options={[
-                          { value: "", label: "No category" },
-                          ...categories.map((category) => ({ value: category.id, label: category.name })),
+                          { value: "", label: "No specific subtask", description: "Log against the main task" },
+                          ...selectedTaskSubtasks.map((subtask) => ({
+                            value: subtask.id,
+                            label: subtask.title,
+                            description: subtask.status === "done" ? "Done" : subtask.status === "dropped" ? "Dropped" : "Open",
+                          })),
                         ]}
                       />
-                    </div>
-                    {newTaskSubtasks.map((subtask, index) => (
-                      <div key={index} className="flex items-end gap-1.5">
-                        <label className="block flex-1 text-xs font-semibold text-[#53506B]">
-                          Subtask {index + 1}
-                          <input
-                            value={subtask}
-                            maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
-                            onChange={(event) => updateNewTaskSubtask(index, event.target.value)}
-                            placeholder="A smaller piece of this task"
-                            className={INPUT_CLASS}
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => removeNewTaskSubtask(index)}
-                          aria-label={`Remove subtask ${index + 1}`}
-                          className="mb-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#777A91] hover:bg-[#F1F1F5] hover:text-[#B42318]"
-                        >
-                          <X size={14} aria-hidden="true" />
-                        </button>
-                      </div>
-                    ))}
-                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    <label className="block text-xs font-semibold text-[#53506B]">
+                      Task title
+                      <input
+                        value={newTaskTitle}
+                        maxLength={WORKLOG_RULES.taskTitleMaxLength}
+                        onChange={(event) => setNewTaskTitle(event.target.value)}
+                        placeholder="Give this task a clear name"
+                        className={INPUT_CLASS}
+                      />
+                    </label>
+                    <section aria-labelledby="new-subtasks-heading" className="rounded-lg border border-[#EEEAF2] bg-white p-3">
+                      <h3 id="new-subtasks-heading" className="text-xs font-semibold text-[#39364F]">
+                        Subtasks
+                      </h3>
+                      <p className="mt-0.5 text-[10px] leading-4 text-[#9A97AD]">
+                        Break this task into smaller activities you can track and update separately.
+                      </p>
                       <button
                         type="button"
                         onClick={addNewTaskSubtask}
-                        className="inline-flex min-h-7 items-center gap-1 text-[11px] font-semibold text-[#6C45F5] hover:underline"
+                        className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-[#CFC8F3] bg-white px-3 text-xs font-semibold text-[#5A3ED0] transition hover:border-[#B8A8F8] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
                       >
-                        <Plus size={12} aria-hidden="true" /> Add subtask
+                        <Plus size={13} aria-hidden="true" /> Add Subtask
                       </button>
-                      <span className="text-[10px] text-[#9A97AD]">Subtasks can also be added later from My Tasks.</span>
-                    </div>
-                    <label className="block text-xs font-semibold text-[#53506B]">
-                      Initial progress note (optional)
-                      <textarea
-                        value={newTaskNote}
-                        onChange={(event) => setNewTaskNote(event.target.value)}
-                        rows={2}
-                        maxLength={WORKLOG_RULES.progressUpdateMaxLength}
-                        placeholder="Where are you starting from?"
-                        className={`${INPUT_CLASS} resize-y`}
-                      />
-                    </label>
+                      {newTaskSubtasks.length ? (
+                        <ul className="mt-2 space-y-1.5">
+                          {newTaskSubtasks.map((subtask, index) => (
+                            <li key={index} className="flex items-center gap-1.5">
+                              <input
+                                value={subtask}
+                                maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                                onChange={(event) => updateNewTaskSubtask(index, event.target.value)}
+                                placeholder={`Subtask ${index + 1}`}
+                                aria-label={`Subtask ${index + 1} title`}
+                                className={INPUT_CLASS}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeNewTaskSubtask(index)}
+                                aria-label={`Remove subtask ${index + 1}`}
+                                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#F1F1F5] hover:text-[#B42318] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                              >
+                                <X size={14} aria-hidden="true" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <p className="mt-2 text-[10px] text-[#9A97AD]">
+                        Subtasks can also be added later from My Tasks.
+                      </p>
+                    </section>
                   </div>
                 )}
+                <label className="mt-3 block border-t border-[#EEEAF2] pt-3 text-xs font-semibold text-[#53506B]">
+                  Work description
+                  <textarea
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                    rows={3}
+                    maxLength={WORKLOG_RULES.descriptionMaxLength}
+                    placeholder="What did you work on during this time?"
+                    className={`${INPUT_CLASS} min-h-[76px] resize-y`}
+                  />
+                </label>
               </section>
 
-              <label className="block text-xs font-semibold text-[#53506B]">
-                What did you do during this time?
-                <textarea
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  rows={3}
-                  maxLength={WORKLOG_RULES.descriptionMaxLength}
-                  placeholder="Briefly describe what you worked on during this period..."
-                  className={`${INPUT_CLASS} min-h-[76px] resize-y`}
-                />
-              </label>
-            </div>
-
-            <section aria-labelledby="time-slots-heading" className={`relative ${activeBreak ? "hidden" : ""}`}>
-              <div className="relative mb-1 flex items-center justify-between gap-2">
-                <h2 id="time-slots-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
-                  Choose a time
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowTimeAdjustment((value) => !value);
-                    lockAutoSlot();
-                  }}
-                  aria-expanded={showTimeAdjustment}
-                  className="min-h-8 whitespace-nowrap rounded-lg px-1.5 text-[10px] font-semibold text-[#6C45F5] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] sm:px-2 sm:text-xs"
-                >
-                  {showTimeAdjustment ? "Hide time adjustment" : "Adjust time / overtime"}
-                </button>
-              </div>
-              {slots.length ? (
-                <div className="grid grid-cols-4 gap-2">
-                  {slots.map((slot) => {
-                    const selected = selectedSlot === slot.key;
-                    const isNext = !selected && nextAvailableSlot?.key === slot.key;
-                    return (
+              <div className="space-y-4">
+                <section aria-labelledby="time-location-heading" className="rounded-xl border border-[#E7E6F0] bg-[#FCFBFF] p-4">
+                  <h2 id="time-location-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
+                    Time &amp; Location
+                  </h2>
+                  <div className="mt-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-[11px] font-semibold text-[#53506B]">Work time</h3>
                       <button
-                        key={slot.key}
                         type="button"
-                        disabled={!slot.available || Boolean(activeBreak)}
-                        onClick={() => selectSlot(slot)}
-                        aria-pressed={selected}
-                        title={!slot.available ? "This time is already logged or covered by a break" : undefined}
-                        className={`relative flex min-h-9 min-w-0 items-center justify-center whitespace-nowrap rounded-lg border px-2 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-not-allowed disabled:opacity-55 ${
-                          selected
-                            ? "border-[#6C45F5] bg-[#F5F1FF] text-[#4E35C6]"
-                            : isNext
-                              ? "border-[#B8A8F8] bg-[#F5F1FF] text-[#4E35C6]"
-                              : slot.available
-                                ? "border-[#E7E6F0] bg-white text-[#39364F] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
-                                : "border-[#E7E6F0] bg-[#F1F1F5] text-[#8B8B9A]"
-                        }`}
+                        onClick={() => {
+                          setShowTimeAdjustment((value) => !value);
+                          lockAutoSlot();
+                        }}
+                        aria-expanded={showTimeAdjustment}
+                        className="inline-flex min-h-8 items-center gap-1 whitespace-nowrap rounded-lg border border-[#E7E6F0] bg-white px-2 text-[10px] font-semibold text-[#5A3ED0] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] sm:text-[11px]"
                       >
-                        {selected ? <Check size={12} aria-hidden="true" className="mr-1 shrink-0" /> : null}
-                        <span className="truncate">{slot.label}</span>
-                        {slot.current && slot.available ? (
-                          <span className="sr-only">Current hour</span>
-                        ) : isNext ? (
-                          <span className="sr-only">Next available</span>
-                        ) : null}
-                        {!slot.available ? <span className="ml-1 shrink-0 text-[9px] font-medium">Recorded</span> : null}
+                        {showTimeAdjustment ? "Hide custom time" : "Set custom time"}
                       </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="rounded-lg bg-[#F7F7FC] px-2.5 py-2 text-xs text-[#777A91]">
-                  No standard work slots today. Use the time adjustment to record weekend overtime.
-                </p>
-              )}
-              {showTimeAdjustment ? (
-                <div className="absolute left-0 right-0 top-full z-20 mt-2 grid gap-2 rounded-xl border border-[#EEEAF8] bg-white p-3 shadow-xl sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-                  <label className={`${activeBreak ? "hidden " : ""}block text-[12px] font-semibold text-[#53506B] sm:text-[13px]`}>
-                    Start time
-                    <input
-                      type="time"
-                      value={startTime}
-                      onChange={(event) => {
-                        setStartTime(event.target.value);
-                        setSelectedSlot("");
-                        lockAutoSlot();
-                      }}
-                      className={INPUT_CLASS}
-                    />
-                  </label>
-                  <label className="block text-xs font-semibold text-[#53506B]">
-                    End time
-                    <input
-                      type="time"
-                      value={endTime}
-                      onChange={(event) => {
-                        setEndTime(event.target.value);
-                        setSelectedSlot("");
-                        lockAutoSlot();
-                      }}
-                      className={INPUT_CLASS}
-                    />
-                  </label>
-                  <label className="flex min-h-11 items-center gap-2 text-sm text-[#53506B]">
-                    <input
-                      type="checkbox"
-                      checked={isReportedOvertime}
-                      onChange={(event) => setIsReportedOvertime(event.target.checked)}
-                      className="h-4 w-4 accent-[#6C45F5]"
-                    />
-                    Report as overtime
-                  </label>
-                </div>
-              ) : null}
-            </section>
+                    </div>
+                    {slots.length ? (
+                      <div className="mt-1.5 grid grid-cols-4 gap-2">
+                        {slots.map((slot) => {
+                          const selected = selectedSlot === slot.key;
+                          const isNext = !selected && nextAvailableSlot?.key === slot.key;
+                          return (
+                            <button
+                              key={slot.key}
+                              type="button"
+                              disabled={!slot.available || Boolean(activeBreak)}
+                              onClick={() => selectSlot(slot)}
+                              aria-pressed={selected}
+                              title={!slot.available ? "This time is already logged or covered by a break" : undefined}
+                              className={`relative flex min-h-9 min-w-0 items-center justify-center whitespace-nowrap rounded-lg border px-2 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-not-allowed disabled:opacity-55 ${
+                                selected
+                                  ? "border-[#6C45F5] bg-[#F5F1FF] text-[#4E35C6]"
+                                  : isNext
+                                    ? "border-[#B8A8F8] bg-[#F5F1FF] text-[#4E35C6]"
+                                    : slot.available
+                                      ? "border-[#E7E6F0] bg-white text-[#39364F] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
+                                      : "border-[#E7E6F0] bg-[#F1F1F5] text-[#8B8B9A]"
+                              }`}
+                            >
+                              {selected ? <Check size={12} aria-hidden="true" className="mr-1 shrink-0" /> : null}
+                              <span className="truncate">{slot.label}</span>
+                              {slot.current && slot.available ? (
+                                <span className="sr-only">Current hour</span>
+                              ) : isNext ? (
+                                <span className="sr-only">Next available</span>
+                              ) : null}
+                              {!slot.available ? <span className="ml-1 shrink-0 text-[9px] font-medium">Recorded</span> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-1.5 rounded-lg bg-[#F7F7FC] px-2.5 py-2 text-xs text-[#777A91]">
+                        No standard work slots today. Use the time adjustment to record weekend overtime.
+                      </p>
+                    )}
+                    {showTimeAdjustment ? (
+                      <div className="mt-2 grid gap-2 rounded-xl border border-[#EEEAF8] bg-white p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+                        <label className="block text-[12px] font-semibold text-[#53506B] sm:text-[13px]">
+                          Start time
+                          <input
+                            type="time"
+                            value={startTime}
+                            onChange={(event) => {
+                              setStartTime(event.target.value);
+                              setSelectedSlot("");
+                              lockAutoSlot();
+                            }}
+                            className={INPUT_CLASS}
+                          />
+                        </label>
+                        <label className="block text-xs font-semibold text-[#53506B]">
+                          End time
+                          <input
+                            type="time"
+                            value={endTime}
+                            onChange={(event) => {
+                              setEndTime(event.target.value);
+                              setSelectedSlot("");
+                              lockAutoSlot();
+                            }}
+                            className={INPUT_CLASS}
+                          />
+                        </label>
+                        <label className="flex min-h-11 items-center gap-2 text-sm text-[#53506B]">
+                          <input
+                            type="checkbox"
+                            checked={isReportedOvertime}
+                            onChange={(event) => setIsReportedOvertime(event.target.checked)}
+                            className="h-4 w-4 accent-[#6C45F5]"
+                          />
+                          Report as overtime
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
+                  <fieldset className="mt-3 min-w-0 border-t border-[#EEEAF2] pt-3">
+                    <legend className="text-[11px] font-semibold text-[#53506B] sm:text-xs">Where did you work?</legend>
+                    <div className="mt-1.5 grid grid-cols-2 gap-2">
+                      {(["office", "home"] as const).map((item) => {
+                        const Icon = LOCATION_ICONS[item];
+                        const selected = location === item;
+                        return (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setLocation(item)}
+                            aria-label={WORK_LOCATION_LABELS[item]}
+                            aria-pressed={selected}
+                            className={`flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg border px-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
+                              selected
+                                ? "border-[#6C45F5] bg-[#F5F1FF] text-[#5A3ED0]"
+                                : "border-[#E7E6F0] bg-white text-[#53506B] hover:bg-[#FCFBFF]"
+                            }`}
+                          >
+                            <Icon size={15} aria-hidden="true" />
+                            {WORK_LOCATION_LABELS[item]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+                </section>
 
-            <div className={`grid grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] items-start gap-4 ${activeBreak ? "hidden " : ""}`}>
-              <fieldset className="min-w-0">
-                <legend className="mb-1 text-[11px] font-semibold text-[#53506B] sm:text-xs">Where did you work?</legend>
-                <div className="grid grid-cols-2 gap-2">
-                  {(["office", "home"] as const).map((item) => {
-                    const Icon = LOCATION_ICONS[item];
-                    const selected = location === item;
-                    return (
-                      <button
-                        key={item}
-                        type="button"
-                        onClick={() => setLocation(item)}
-                        aria-label={WORK_LOCATION_LABELS[item]}
-                        aria-pressed={selected}
-                        className={`flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg border px-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
-                          selected
-                            ? "border-[#6C45F5] bg-[#F5F1FF] text-[#5A3ED0]"
-                            : "border-[#E7E6F0] bg-white text-[#53506B] hover:bg-[#FCFBFF]"
-                        }`}
-                      >
-                        <Icon size={15} aria-hidden="true" />
-                        {WORK_LOCATION_LABELS[item]}
-                      </button>
-                    );
-                  })}
-                </div>
-              </fieldset>
-
-              <div className="relative min-w-0 space-y-1.5">
-                <p className="mb-1 text-[11px] font-semibold text-[#53506B] sm:text-xs">Evidence</p>
-                <button
-                  type="button"
-                  onClick={() => setShowEvidenceLink((value) => !value)}
-                  aria-expanded={showEvidenceLink}
-                  className="min-h-7 text-left text-[10px] font-medium text-[#6C45F5] hover:underline sm:text-xs"
-                >
-                  {showEvidenceLink ? "Hide evidence" : "Add evidence (optional)"}
-                </button>
-                {showEvidenceLink ? (
-                  <label className="absolute bottom-full left-0 right-0 z-30 mb-1 block rounded-xl border border-[#E7E6F0] bg-white p-2 text-[10px] font-medium text-[#777A91] shadow-lg sm:text-xs">
-                    Evidence link
-                    <input
-                      value={evidenceLink}
-                      onChange={(event) => setEvidenceLink(event.target.value)}
-                      placeholder="https://"
-                      className={INPUT_CLASS}
-                    />
-                  </label>
-                ) : null}
+                <section aria-labelledby="additional-details-heading" className="rounded-xl border border-[#E7E6F0] bg-[#FCFBFF] p-4">
+                  <h2 id="additional-details-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
+                    Additional Details
+                  </h2>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowEvidenceLink((value) => !value)}
+                      aria-expanded={showEvidenceLink}
+                      className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-[#E7E6F0] bg-white px-3 text-xs font-semibold text-[#5A3ED0] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                    >
+                      <Paperclip size={13} aria-hidden="true" />
+                      {showEvidenceLink ? "Hide evidence" : "Add evidence"}
+                    </button>
+                    {showEvidenceLink ? (
+                      <label className="mt-2 block rounded-lg border border-[#EEEAF2] bg-white p-2.5 text-[11px] font-medium text-[#777A91]">
+                        Evidence link
+                        <input
+                          value={evidenceLink}
+                          onChange={(event) => setEvidenceLink(event.target.value)}
+                          placeholder="https://"
+                          className={`${INPUT_CLASS} mt-1`}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+                </section>
               </div>
             </div>
+          )}
 
-            {isHistoricalEdit ? (
-              <p className={`rounded-xl bg-[#F7F7FC] px-3 py-2 text-xs text-[#777A91] ${activeBreak ? "hidden" : ""}`}>
-                This edit changes only the selected historical entry. It will not change today’s logging date or the
-                task’s current status.
-              </p>
-            ) : null}
-            {error ? (
-              <p role="alert" className="rounded-xl bg-[#FDEEEE] px-3 py-2.5 text-sm text-[#B43A3A]">
-                {error}
-              </p>
-            ) : null}
+          {isHistoricalEdit ? (
+            <p className={`rounded-xl bg-[#F7F7FC] px-3 py-2 text-xs text-[#777A91] ${activeBreak ? "hidden" : ""}`}>
+              This edit changes only the selected historical entry. It will not change today’s logging date or the
+              task’s current status.
+            </p>
+          ) : null}
+          {error ? (
+            <p role="alert" className="rounded-xl bg-[#FDEEEE] px-3 py-2.5 text-sm text-[#B43A3A]">
+              {error}
+            </p>
+          ) : null}
 
-            {activeBreak ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#F6D99A] bg-[#FFF6E5] px-4 py-3">
-                <div className="flex items-center gap-2 text-sm font-semibold text-[#9A6200]">
-                  <Coffee size={17} aria-hidden="true" />
-                  On break since {formatTime(activeBreak.startAt)}
-                </div>
-                <button
-                  type="button"
-                  onClick={handleEndBreak}
-                  className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#F59E0B] px-4 text-sm font-semibold text-white transition hover:bg-[#DB8A08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] focus-visible:ring-offset-2"
-                >
-                  <Square size={14} aria-hidden="true" /> End Break
-                </button>
+          {activeBreak ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#F6D99A] bg-[#FFF6E5] px-4 py-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[#9A6200]">
+                <Coffee size={17} aria-hidden="true" />
+                On break since {formatTime(activeBreak.startAt)}
               </div>
-            ) : null}
+              <button
+                type="button"
+                onClick={handleEndBreak}
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#F59E0B] px-4 text-sm font-semibold text-white transition hover:bg-[#DB8A08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] focus-visible:ring-offset-2"
+              >
+                <Square size={14} aria-hidden="true" /> End Break
+              </button>
+            </div>
+          ) : null}
 
-            {!activeBreak ? (
-              <div className="grid grid-cols-2 gap-3 border-t border-[#EEEAF2] pt-3">
-                <button
-                  type="button"
-                  onClick={handleStartBreak}
-                  disabled={Boolean(activeBreak) || Boolean(editingId)}
-                  className="inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg border border-[#F3C56B] bg-[#FFF6E5] px-5 text-sm font-semibold text-[#9A6200] transition hover:bg-[#FFEFCE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Coffee size={16} aria-hidden="true" /> Take Break
-                </button>
-                <button
-                  type="button"
-                  onClick={submitEntry}
-                  disabled={Boolean(activeBreak) || submitting}
-                  className="inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[#6C45F5] px-6 text-sm font-semibold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {editingId ? <Save size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}
-                  {editingId ? "Save Changes" : "Save Work Entry"}
-                </button>
-              </div>
-            ) : null}
-          </div>
+          {!activeBreak ? (
+            <div className="grid grid-cols-2 gap-3 border-t border-[#EEEAF2] pt-3">
+              <button
+                type="button"
+                onClick={handleStartBreak}
+                disabled={Boolean(activeBreak) || Boolean(editingId)}
+                className="inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg border border-[#F3C56B] bg-[#FFF6E5] px-5 text-sm font-semibold text-[#9A6200] transition hover:bg-[#FFEFCE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Coffee size={16} aria-hidden="true" /> Take Break
+              </button>
+              <button
+                type="button"
+                onClick={submitEntry}
+                disabled={Boolean(activeBreak) || submitting}
+                className="inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[#6C45F5] px-6 text-sm font-semibold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {editingId ? <Save size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}
+                {editingId ? "Save Changes" : "Save Work Entry"}
+              </button>
+            </div>
+          ) : null}
         </section>
       </div>
     </div>

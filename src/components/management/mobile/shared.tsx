@@ -27,13 +27,17 @@ export function initialsOf(name: string) {
     .toUpperCase();
 }
 
-export type PrimaryLocation = "office" | "home" | "mixed" | "other" | "none";
+export type PrimaryLocation = "office" | "home" | "mixed" | "other" | "unknown" | "none";
 
 /** Primary recorded location for a day, derived from recorded minutes only. */
 export function primaryLocation(day: DaySummary): PrimaryLocation {
   if (day.entries.length === 0) return "none";
-  const { officeMinutes, homeMinutes, otherMinutes } = day;
-  if (officeMinutes === 0 && homeMinutes === 0) return otherMinutes > 0 ? "other" : "none";
+  const { officeMinutes, homeMinutes, otherMinutes, unknownMinutes } = day;
+  if (officeMinutes === 0 && homeMinutes === 0) {
+    if (otherMinutes > 0) return "other";
+    if (unknownMinutes > 0) return "unknown";
+    return "none";
+  }
   if (officeMinutes === homeMinutes) return "mixed";
   return officeMinutes > homeMinutes ? "office" : "home";
 }
@@ -43,6 +47,7 @@ export const LOCATION_LABELS: Record<PrimaryLocation, string> = {
   home: "From Home",
   mixed: "Mixed",
   other: "Other",
+  unknown: "Location unknown",
   none: "—",
 };
 

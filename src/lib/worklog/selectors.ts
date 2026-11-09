@@ -22,6 +22,7 @@ export interface DaySummary {
   officeMinutes: number;
   homeMinutes: number;
   otherMinutes: number;
+  unknownMinutes: number;
   activeBreak: BreakEntry | null;
   isWorkingDay: boolean;
   isToday: boolean;
@@ -64,6 +65,9 @@ export function getDaySummary(db: WorkLogDatabase, employeeId: EmployeeId, dateK
   const otherMinutes = entries
     .filter((e) => e.workLocation === "other")
     .reduce((total, e) => total + durationMinutes(e.startAt, e.endAt), 0);
+  const unknownMinutes = entries
+    .filter((e) => e.workLocation === "unknown")
+    .reduce((total, e) => total + durationMinutes(e.startAt, e.endAt), 0);
   const breakMinutes = breaks.reduce((total, b) => total + breakMinutesOf(b, now, breaks), 0);
 
   let shiftMinutes = 0;
@@ -94,6 +98,7 @@ export function getDaySummary(db: WorkLogDatabase, employeeId: EmployeeId, dateK
     officeMinutes,
     homeMinutes,
     otherMinutes,
+    unknownMinutes,
     activeBreak: breaks.find((b) => b.endAt === null) ?? null,
     isWorkingDay,
     isToday,

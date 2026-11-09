@@ -33,7 +33,7 @@ import type { WorkSlot } from "./shared";
 const LOCATION_ICONS = {
   office: Building2,
   home: House,
-} satisfies Record<Exclude<WorkLocation, "other">, typeof Building2>;
+} satisfies Record<Exclude<WorkLocation, "other" | "unknown">, typeof Building2>;
 
 export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
   const [taskSheetOpen, setTaskSheetOpen] = useState(false);

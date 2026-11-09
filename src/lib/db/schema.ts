@@ -16,7 +16,7 @@ import {
 export const membershipRoleEnum = pgEnum("membership_role", ["staff", "hr", "chairman"]);
 export const taskStatusEnum = pgEnum("task_status", ["ongoing", "done", "blocked", "dropped"]);
 export const entryTypeEnum = pgEnum("entry_type", ["work", "break"]);
-export const workLocationEnum = pgEnum("work_location", ["office", "home"]);
+export const workLocationEnum = pgEnum("work_location", ["office", "home", "unknown"]);
 export const workTypeEnum = pgEnum("work_type", ["normal", "overtime"]);
 
 const timestamps = {
@@ -93,9 +93,26 @@ export const tasks = pgTable(
     } | null>(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdByMembershipId: uuid("created_by_membership_id").references(() => memberships.id),
+    /** 'recovery_default' when the status was not recorded and a default was used. */
+    statusSource: text("status_source").notNull().default("recorded"),
+    /** 'recovery_provisional' when the description/details were never recorded. */
+    detailsSource: text("details_source").notNull().default("recorded"),
+    recoveryImportId: uuid("recovery_import_id").references(() => recoveryImports.id),
     ...timestamps,
   },
-  (t) => [index("tasks_employee_idx").on(t.employeeId), index("tasks_category_idx").on(t.categoryId)]
+  (t) => [
+    index("tasks_employee_idx").on(t.employeeId),
+    index("tasks_category_idx").on(t.categoryId),
+    index("tasks_recovery_import_idx").on(t.recoveryImportId),
+    check(
+      "tasks_status_source_check",
+      sql`status_source IN ('recorded', 'recovery_default')`
+    ),
+    check(
+      "tasks_details_source_check",
+      sql`details_source IN ('recorded', 'recovery_default', 'recovery_provisional')`
+    ),
+  ]
 );
 
 export const taskSubtasks = pgTable(
@@ -113,11 +130,23 @@ export const taskSubtasks = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdByMembershipId: uuid("created_by_membership_id").references(() => memberships.id),
+    statusSource: text("status_source").notNull().default("recorded"),
+    detailsSource: text("details_source").notNull().default("recorded"),
+    recoveryImportId: uuid("recovery_import_id").references(() => recoveryImports.id),
     ...timestamps,
   },
   (t) => [
     index("task_subtasks_task_order_idx").on(t.taskId, t.displayOrder),
+    index("task_subtasks_recovery_import_idx").on(t.recoveryImportId),
     check("task_subtasks_title_not_blank", sql`length(btrim(title)) > 0`),
+    check(
+      "task_subtasks_status_source_check",
+      sql`status_source IN ('recorded', 'recovery_default')`
+    ),
+    check(
+      "task_subtasks_details_source_check",
+      sql`details_source IN ('recorded', 'recovery_default', 'recovery_provisional')`
+    ),
   ]
 );
 
@@ -217,6 +246,7 @@ export const timeEntries = pgTable(
     updatedByMembershipId: uuid("updated_by_membership_id").references(() => memberships.id),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
     voidReason: text("void_reason"),
+    recoveryImportId: uuid("recovery_import_id").references(() => recoveryImports.id),
     ...timestamps,
   },
   (t) => [
@@ -224,6 +254,7 @@ export const timeEntries = pgTable(
     index("time_entries_start_idx").on(t.startAt),
     index("time_entries_task_idx").on(t.taskId),
     index("time_entries_subtask_idx").on(t.subtaskId),
+    index("time_entries_recovery_import_idx").on(t.recoveryImportId),
     check(
       "time_entries_end_after_start",
       sql`end_at IS NULL OR end_at > start_at`
@@ -253,6 +284,42 @@ export const auditEvents = pgTable(
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("audit_events_entity_idx").on(t.entityType, t.entityId)]
+);
+
+export const recoveryImports = pgTable(
+  "recovery_imports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    importKey: text("import_key").notNull(),
+    sourceFile: text("source_file").notNull(),
+    sourceSha256: text("source_sha256").notNull(),
+    sourceExportedAt: timestamp("source_exported_at", { withTimezone: true }).notNull(),
+    timezone: text("timezone").notNull(),
+    summary: jsonb("summary").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("recovery_imports_key_key").on(t.importKey)]
+);
+
+export const recoveryImportRecords = pgTable(
+  "recovery_import_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    importId: uuid("import_id")
+      .notNull()
+      .references(() => recoveryImports.id),
+    entityType: text("entity_type").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    targetId: uuid("target_id"),
+    canonicalSourceId: uuid("canonical_source_id"),
+    payload: jsonb("payload"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("recovery_import_records_unique").on(t.importId, t.entityType, t.sourceId),
+    index("recovery_import_records_target_idx").on(t.entityType, t.targetId),
+  ]
 );
 
 export const invitations = pgTable(

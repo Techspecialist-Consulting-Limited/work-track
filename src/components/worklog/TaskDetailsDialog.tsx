@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Check,
   ChevronLeft,
+  Eye,
   History,
   ListChecks,
   Pencil,
@@ -116,32 +117,69 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
               {tasks.map((item) => {
                 const subtasks = getSubtasksForTask(c.db, item.id);
                 const summary = subtaskSummary(subtasks);
+                const selected = selectedId === item.id;
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedId(item.id);
-                      setError(null);
-                    }}
-                    aria-pressed={selectedId === item.id}
-                    className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
-                      selectedId === item.id
-                        ? "border-[#6C45F5] bg-[#F5F1FF]"
-                        : "border-[#E7E6F0] bg-white hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
+                    className={`rounded-xl border bg-white p-3 transition ${
+                      selected ? "border-[#6C45F5] bg-[#F5F1FF]" : "border-[#E7E6F0] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
                     }`}
                   >
-                    <span className="flex items-start justify-between gap-2">
-                      <span className="min-w-0 break-words text-[13px] font-semibold text-[#17172F]">{item.title}</span>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 break-words text-[13px] font-semibold text-[#17172F]">{item.title}</p>
                       <span className={`inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${TASK_STATUS_BADGE_CLASSES[item.currentStatus]}`}>
                         {TASK_STATUS_LABELS[item.currentStatus]}
                       </span>
-                    </span>
-                    <span className="mt-1 block text-[10px] text-[#777A91]">
+                    </div>
+                    {item.description ? (
+                      <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-[#777A91]">{item.description}</p>
+                    ) : null}
+                    <p className="mt-1 text-[10px] text-[#777A91]">
                       {item.categoryName ? `${item.categoryName} · ` : ""}
                       {summary.label}
-                    </span>
-                  </button>
+                    </p>
+                    {summary.total > 0 ? (
+                      <div
+                        role="progressbar"
+                        aria-label={`${item.title} subtask completion`}
+                        aria-valuemin={0}
+                        aria-valuemax={summary.total}
+                        aria-valuenow={summary.done + summary.dropped}
+                        className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#ECEBF2]"
+                      >
+                        <div
+                          className="h-full rounded-full bg-[#6C45F5] transition-[width]"
+                          style={{ width: `${((summary.done + summary.dropped) / summary.total) * 100}%` }}
+                        />
+                      </div>
+                    ) : null}
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => c.openUpdateProgress(item.id)}
+                        className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg bg-[#6C45F5] px-2 text-[11px] font-semibold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                      >
+                        <Pencil size={11} aria-hidden="true" />
+                        Update Progress
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedId(item.id);
+                          setError(null);
+                        }}
+                        aria-pressed={selected}
+                        className={`inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
+                          selected
+                            ? "border-[#6C45F5] bg-white text-[#4E35C6]"
+                            : "border-[#E7E6F0] bg-white text-[#4A4665] hover:border-[#CFC8F3] hover:bg-[#F5F1FF]"
+                        }`}
+                      >
+                        <Eye size={11} aria-hidden="true" />
+                        View Task
+                      </button>
+                    </div>
+                  </div>
                 );
               })}
             </div>

@@ -35,6 +35,8 @@ function entryRow(db: WorkLogDatabase, e: WorkEntry) {
     employee: employee?.name ?? e.employeeId,
     task: task?.title ?? "",
     subtask: subtask?.title ?? "",
+    taskDescription: task?.description ?? "",
+    subtaskDescription: subtask?.description ?? "",
     description: e.description,
     location: WORK_LOCATION_LABELS[e.workLocation],
     /** Work entries do not own status; this is the task's current status. */
@@ -60,15 +62,15 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const logSheet = workbook.addWorksheet("Work Log");
   styleSheet(
     logSheet,
-    ["Date", "Employee", "Start", "End", "Task", "Subtask", "Description", "Location", "Task status (current)", "Overtime (h)", "Reported overtime", "Evidence"],
-    [14, 20, 8, 8, 30, 24, 40, 12, 20, 13, 17, 30]
+    ["Date", "Employee", "Start", "End", "Task", "Subtask", "Task description", "Subtask description", "Description", "Location", "Task status (current)", "Overtime (h)", "Reported overtime", "Evidence"],
+    [14, 20, 8, 8, 30, 24, 28, 24, 40, 12, 20, 13, 17, 30]
   );
   const logEntries = [...entries].sort((a, b) =>
     a.employeeId === b.employeeId ? a.startAt.localeCompare(b.startAt) : a.employeeId.localeCompare(b.employeeId)
   );
   for (const e of logEntries) {
     const r = entryRow(db, e);
-    logSheet.addRow([r.date, r.employee, r.start, r.end, r.task, r.subtask, r.description, r.location, r.taskStatus, r.overtimeHours, r.reportedOvertime, r.evidence]);
+    logSheet.addRow([r.date, r.employee, r.start, r.end, r.task, r.subtask, r.taskDescription, r.subtaskDescription, r.description, r.location, r.taskStatus, r.overtimeHours, r.reportedOvertime, r.evidence]);
   }
   logSheet.getColumn(3).numFmt = "hh:mm";
   logSheet.getColumn(4).numFmt = "hh:mm";
@@ -77,8 +79,8 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const tasksSheet = workbook.addWorksheet("Tasks");
   styleSheet(
     tasksSheet,
-    ["Employee", "Task", "Current status", "Blocker reason", "Dropped reason", "Created", "Completed", "Management review", "Review note"],
-    [20, 32, 16, 30, 30, 14, 14, 18, 30]
+    ["Employee", "Task", "Description", "Current status", "Blocker reason", "Dropped reason", "Created", "Completed", "Management review", "Review note"],
+    [20, 32, 36, 16, 30, 30, 14, 14, 18, 30]
   );
   const employeeName = (id: string) => db.employees.find((x) => x.id === id)?.name ?? id;
   const includedTaskIds = new Set(entries.map((entry) => entry.taskId));
@@ -88,6 +90,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
     tasksSheet.addRow([
       employeeName(t.employeeId),
       t.title,
+      t.description ?? "",
       TASK_STATUS_LABELS[t.currentStatus],
       t.blockerReason ?? "",
       t.droppedReason ?? "",
@@ -102,8 +105,8 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const summarySheet = workbook.addWorksheet("Employee Summary");
   styleSheet(
     summarySheet,
-    ["Employee", "Department", "Entries", "Total logged (h)", "Normal (h)", "Overtime (h)", "Break (h)", "Office (h)", "Home (h)", "Other (h)", "Office share"],
-    [20, 22, 10, 17, 12, 13, 12, 12, 12, 12, 13]
+    ["Employee", "Department", "Entries", "Total logged (h)", "Normal (h)", "Overtime (h)", "Break (h)", "Office (h)", "Home (h)", "Other (h)", "Unknown (h)", "Office share"],
+    [20, 22, 10, 17, 12, 13, 12, 12, 12, 12, 12, 13]
   );
   for (const emp of db.employees) {
     if (filter.employeeId && filter.employeeId !== "all" && filter.employeeId !== emp.id) continue;
@@ -114,6 +117,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
     const office = mine.filter((e) => e.workLocation === "office").reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
     const home = mine.filter((e) => e.workLocation === "home").reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
     const other = mine.filter((e) => e.workLocation === "other").reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
+    const unknown = mine.filter((e) => e.workLocation === "unknown").reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
     const breakMin = db.breaks
       .filter((b) => b.employeeId === emp.id && b.endAt && dateKeyOf(b.startAt) >= filter.fromKey && dateKeyOf(b.startAt) <= filter.toKey)
       .reduce((s, b) => s + durationMinutes(b.startAt, b.endAt as string), 0);
@@ -128,6 +132,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
       hours(office),
       hours(home),
       hours(other),
+      hours(unknown),
       total > 0 ? Math.round((office / total) * 1000) / 10 : 0,
     ]);
   }
@@ -165,7 +170,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const locationSheet = workbook.addWorksheet("Work Location Comparison");
   styleSheet(locationSheet, ["Location", "Entries", "Hours", "Share of logged time"], [20, 10, 12, 20]);
   const totalAll = entries.reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
-  for (const loc of ["office", "home", "other"] as const) {
+  for (const loc of ["office", "home", "other", "unknown"] as const) {
     const mine = entries.filter((e) => e.workLocation === loc);
     const minutes = mine.reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
     locationSheet.addRow([

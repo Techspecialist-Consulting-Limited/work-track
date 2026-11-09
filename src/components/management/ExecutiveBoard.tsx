@@ -1,15 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Coffee,
   Download,
   ExternalLink,
   FileText,
+  Folder,
   X,
   Zap,
 } from "lucide-react";
@@ -18,18 +22,25 @@ import { ExecutiveMobile } from "./mobile/ExecutiveMobile";
 import { InviteChairman } from "./InviteChairman";
 import { Avatar } from "./mobile/shared";
 import {
+  buildEmployeeHierarchy,
+  getRecoveredDaySummary,
+  LegacyTaskList,
+  RecoveredDayPanel,
+  TaskGroupList,
+  VerificationBadge,
+  type EmployeeHierarchy,
+  type HierarchyTask,
+} from "./TaskHierarchy";
+import {
   getDatabaseSnapshot,
   getSessionEmployeeId,
   getSessionRole,
   getServerSnapshot,
   getSessionUser,
-  setManagementReview,
   subscribeToDatabase,
 } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
-import { StatusBadge } from "@/components/worklog/StatusBadge";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
-import { EXERCISE_END, EXERCISE_START } from "@/lib/worklog/seed";
 import { getDaySummary, getTaskById } from "@/lib/worklog/selectors";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
@@ -46,9 +57,6 @@ function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
-const EXERCISE_START_KEY = `${EXERCISE_START.year}-${pad2(EXERCISE_START.month)}-${pad2(EXERCISE_START.day)}`;
-const EXERCISE_END_KEY = `${EXERCISE_END.year}-${pad2(EXERCISE_END.month)}-${pad2(EXERCISE_END.day)}`;
-
 const STATUS_LABELS_SHORT: Record<TaskStatus, string> = {
   ongoing: "Ongoing",
   done: "Done",
@@ -57,6 +65,7 @@ const STATUS_LABELS_SHORT: Record<TaskStatus, string> = {
 };
 
 type BoardFilter = "all" | "logged" | "break" | "none";
+type BoardView = "staff" | "tasks";
 
 interface EmployeeDay {
   employee: Employee;
@@ -93,6 +102,7 @@ function ExecutiveDesktopBoard() {
   const canEditProfile = Boolean(meEmployee) && getSessionRole() !== "chairman";
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
   const [dateKey, setDateKey] = useState<string | null>(null);
+  const [boardView, setBoardView] = useState<BoardView>("staff");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<BoardFilter>("all");
@@ -106,7 +116,7 @@ function ExecutiveDesktopBoard() {
   const todayKey = getZonedDateKey(now);
   const activeKey = dateKey ?? todayKey;
   const selected = db.employees.find((e) => e.id === selectedId) ?? null;
-  const outsideExercise = activeKey < EXERCISE_START_KEY || activeKey > EXERCISE_END_KEY;
+
 
   const employeeDays = useMemo(
     () =>
@@ -130,12 +140,28 @@ function ExecutiveDesktopBoard() {
     return status === "none" || status === "upcoming";
   });
 
+  const hierarchies = useMemo(
+    () =>
+      db.employees
+        .map((employee) => buildEmployeeHierarchy(db, employee.id, activeKey))
+        .filter((hierarchy): hierarchy is EmployeeHierarchy => hierarchy !== null),
+    [db, activeKey]
+  );
+  const hierarchyById = new Map(hierarchies.map((hierarchy) => [hierarchy.employee.id, hierarchy]));
+  const visibleHierarchies = visibleEmployees
+    .map(({ employee }) => hierarchyById.get(employee.id))
+    .filter((hierarchy): hierarchy is EmployeeHierarchy => Boolean(hierarchy));
+  const visibleTaskItems = visibleHierarchies.flatMap((hierarchy) => hierarchy.tasks);
+  const visibleLegacyTasks = visibleHierarchies.flatMap((hierarchy) => hierarchy.legacyTasks);
+  const recovered = useMemo(() => getRecoveredDaySummary(db, activeKey), [db, activeKey]);
+
   const staffLogged = employeeDays.filter((e) => e.day.entries.length > 0).length;
   const workEntries = employeeDays.reduce((s, e) => s + e.day.entries.length, 0);
   const tasksDone = db.tasks.filter((t) => t.completedAt && dateKeyOf(t.completedAt) === activeKey).length;
   const overtimeMinutes = employeeDays.reduce((s, e) => s + e.day.overtimeMinutes, 0);
   const officeMinutes = employeeDays.reduce((s, e) => s + e.day.officeMinutes, 0);
   const homeMinutes = employeeDays.reduce((s, e) => s + e.day.homeMinutes, 0);
+  const unknownMinutes = employeeDays.reduce((s, e) => s + e.day.unknownMinutes, 0);
 
   useEffect(() => {
     if (!selected) return;
@@ -193,9 +219,6 @@ function ExecutiveDesktopBoard() {
               <div className="flex items-baseline gap-2">
                 <h1 className="text-lg font-bold tracking-tight">Team Board</h1>
               </div>
-              <p className="text-[11px] text-[#777A91]">
-                Work exercise: {formatDateLabel(EXERCISE_START_KEY)} – {formatDateLabel(EXERCISE_END_KEY)}
-              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -268,6 +291,25 @@ function ExecutiveDesktopBoard() {
           >
             Today
           </button>
+          <div
+            role="group"
+            aria-label="Board view"
+            className="inline-flex items-center gap-1 rounded-xl border border-[#E7E6F0] bg-white p-1 shadow-sm"
+          >
+            {(["staff", "tasks"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={boardView === option}
+                onClick={() => setBoardView(option)}
+                className={`min-h-8 rounded-lg px-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
+                  boardView === option ? "bg-[#6C45F5] text-white" : "text-[#53506B] hover:bg-[#F5F1FF]"
+                }`}
+              >
+                {option === "staff" ? "By Staff" : "By Tasks"}
+              </button>
+            ))}
+          </div>
           <p className="text-sm font-semibold text-[#17172F]">
             {new Intl.DateTimeFormat("en-GB", {
               timeZone: WORKTRACK_SCHEDULE.timezone,
@@ -279,12 +321,7 @@ function ExecutiveDesktopBoard() {
           </p>
         </div>
 
-        {outsideExercise ? (
-          <p className="mb-4 shrink-0 rounded-xl border border-[#F3C56B] bg-[#FFF6E5] px-4 py-2.5 text-xs font-medium text-[#8A5A00]">
-            This date is outside the work exercise ({formatDateLabel(EXERCISE_START_KEY)} – {formatDateLabel(EXERCISE_END_KEY)}).
-            Any records found are still shown.
-          </p>
-        ) : null}
+        {recovered ? <RecoveredDayPanel summary={recovered} dateKey={activeKey} className="mb-4 shrink-0" /> : null}
 
         <section aria-label="Daily summary" className="mb-4 grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4">
           <SummaryCard label="Staff who logged work" value={`${staffLogged} of ${db.employees.length}`} />
@@ -318,14 +355,36 @@ function ExecutiveDesktopBoard() {
           />
           <p className="ml-auto hidden text-xs text-[#777A91] md:block">
             Office {formatMinutes(officeMinutes)} · Home {formatMinutes(homeMinutes)}
+            {unknownMinutes > 0 ? ` · Location unknown ${formatMinutes(unknownMinutes)}` : ""}
           </p>
         </section>
         <p className="mb-3 text-xs text-[#777A91] md:hidden">
           Office {formatMinutes(officeMinutes)} · Home {formatMinutes(homeMinutes)}
+          {unknownMinutes > 0 ? ` · Location unknown ${formatMinutes(unknownMinutes)}` : ""}
         </p>
         {exportError ? <p role="alert" className="mb-3 shrink-0 text-xs text-[#B43A3A]">{exportError}</p> : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {boardView === "tasks" ? (
+          <div className="space-y-5">
+            <section>
+              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-sm font-bold text-[#39364F]">Tasks with timed work</h2>
+                <span className="text-[11px] font-medium text-[#8B8B9A]">
+                  {visibleTaskItems.length} {visibleTaskItems.length === 1 ? "task" : "tasks"} ·{" "}
+                  {visibleTaskItems.reduce((total, item) => total + item.entryCount, 0)} entries
+                </span>
+              </div>
+              <TaskGroupList
+                items={visibleTaskItems}
+                showEmployee
+                emptyMessage="No timed tasks for this date."
+              />
+            </section>
+            <LegacyTaskList tasks={visibleLegacyTasks} />
+          </div>
+        ) : (
+          <>
         {/* Desktop table */}
         <div className="hidden overflow-hidden rounded-2xl border border-[#E7E6F0] bg-white shadow-sm md:block">
           <table className="w-full text-left text-sm">
@@ -333,13 +392,18 @@ function ExecutiveDesktopBoard() {
               <tr className="border-b border-[#EEEAF2] bg-[#FCFBFF] text-[11px] font-semibold uppercase tracking-wide text-[#8B8B9A]">
                 <th className="px-4 py-3">Employee</th>
                 <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3">Today’s work</th>
+                <th className="px-4 py-3 text-right">Work time</th>
                 <th className="px-4 py-3 text-right">Entries</th>
+                <th className="px-4 py-3 text-right">Tasks</th>
+                <th className="px-4 py-3">Verification</th>
                 <th className="px-4 py-3">Status</th>
               </tr>
             </thead>
             <tbody>
-              {visibleEmployees.map(({ employee, day, status, snapshot }) => (
+              {visibleEmployees.map(({ employee, day, status, snapshot }) => {
+                const hierarchy = hierarchyById.get(employee.id);
+                const taskCount = hierarchy?.tasks.length ?? 0;
+                return (
                 <tr
                   key={employee.id}
                   tabIndex={0}
@@ -357,22 +421,36 @@ function ExecutiveDesktopBoard() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2.5">
                       <Avatar name={employee.name} avatarUrl={employee.avatarUrl} size={32} />
-                      <span className="font-semibold text-[#17172F]">{employee.name}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold text-[#17172F]">{employee.name}</span>
+                        <span className="block truncate text-[11px] text-[#8B8B9A]" title={snapshot}>
+                          {snapshot}
+                        </span>
+                      </span>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-[#53506B]">{employee.role}</td>
-                  <td className="max-w-0 px-4 py-3">
-                    <span className="block truncate text-[#53506B]" title={snapshot}>{snapshot}</span>
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">
+                    {formatMinutes(day.workMinutes)}
                   </td>
                   <td className="px-4 py-3 text-right font-semibold text-[#17172F]">{day.entries.length}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-[#17172F]">{taskCount}</td>
+                  <td className="px-4 py-3">
+                    {taskCount > 0 && hierarchy ? (
+                      <VerificationBadge verification={hierarchy.verification} />
+                    ) : (
+                      <span className="text-[11px] text-[#A6A3BC]">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <StatusBadges status={status} hasBreak={day.breaks.length > 0} hasOvertime={day.overtimeMinutes > 0} />
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {visibleEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-sm text-[#777A91]">
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-[#777A91]">
                     No employees match this search.
                   </td>
                 </tr>
@@ -383,7 +461,10 @@ function ExecutiveDesktopBoard() {
 
         {/* Mobile cards */}
         <ul className="space-y-2 md:hidden">
-          {visibleEmployees.map(({ employee, day, status, snapshot }) => (
+          {visibleEmployees.map(({ employee, day, status, snapshot }) => {
+            const hierarchy = hierarchyById.get(employee.id);
+            const taskCount = hierarchy?.tasks.length ?? 0;
+            return (
             <li key={employee.id}>
               <button
                 type="button"
@@ -401,18 +482,28 @@ function ExecutiveDesktopBoard() {
                   <StatusBadges status={status} hasBreak={day.breaks.length > 0} hasOvertime={day.overtimeMinutes > 0} />
                 </div>
                 <p className="mt-2.5 line-clamp-2 text-[13px] leading-5 text-[#53506B]">{snapshot}</p>
-                <p className="mt-1.5 text-[11px] font-medium text-[#8B8B9A]">
-                  {day.entries.length} work {day.entries.length === 1 ? "entry" : "entries"}
+                <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-medium text-[#8B8B9A]">
+                  <span>{day.entries.length} work {day.entries.length === 1 ? "entry" : "entries"}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{formatMinutes(day.workMinutes)}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{taskCount} {taskCount === 1 ? "task" : "tasks"}</span>
+                  {taskCount > 0 && hierarchy ? (
+                    <VerificationBadge verification={hierarchy.verification} />
+                  ) : null}
                 </p>
               </button>
             </li>
-          ))}
+            );
+          })}
           {visibleEmployees.length === 0 ? (
             <li className="rounded-2xl border border-[#E7E6F0] bg-white px-4 py-8 text-center text-sm text-[#777A91]">
               No employees match this search.
             </li>
           ) : null}
         </ul>
+          </>
+        )}
         </div>
       </div>
 
@@ -583,6 +674,212 @@ function BoardDatePicker({
   );
 }
 
+const ACTIVITY_STATUS_BADGE_CLASSES: Record<TaskStatus, string> = {
+  ongoing: "bg-[#EFF6FF] text-[#1D4ED8]",
+  done: "bg-[#ECFDF5] text-[#047857]",
+  blocked: "bg-[#FFFBEB] text-[#B45309]",
+  dropped: "bg-[#F1F1F5] text-[#6B6B7E]",
+};
+
+function ActivityStatusBadge({ status }: { status: TaskStatus }) {
+  return (
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4 ${ACTIVITY_STATUS_BADGE_CLASSES[status]}`}
+    >
+      {STATUS_LABELS_SHORT[status]}
+    </span>
+  );
+}
+
+function activityLocationLabel(location: WorkEntry["workLocation"]): string {
+  return location === "unknown" ? "—" : WORK_LOCATION_LABELS[location];
+}
+
+function ActivityMetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-[#E7E6F0] bg-white px-3.5 py-3">
+      <span
+        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#F3EEFF] text-[#6C45F5]"
+        aria-hidden="true"
+      >
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[10px] font-semibold uppercase tracking-wide text-[#8B8B9A]">{label}</span>
+        <span className="block text-lg font-bold leading-6 text-[#17172F]">{value}</span>
+      </span>
+    </div>
+  );
+}
+
+function ActivityEntryRow({
+  entry,
+  name,
+  status,
+}: {
+  entry: WorkEntry;
+  name: string;
+  status: TaskStatus;
+}) {
+  return (
+    <tr className="align-top border-t border-[#F5F3FB] bg-white">
+      <td className="whitespace-nowrap px-3 py-2.5">
+        <span className="block text-xs font-semibold text-[#17172F]">
+          {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+        </span>
+      </td>
+      <td className="max-w-[180px] px-3 py-2.5 text-xs font-medium text-[#39364F]">
+        <span className="break-words">{name}</span>
+      </td>
+      <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
+      <td className="max-w-[280px] px-3 py-2.5 text-xs leading-5 text-[#53506B]">
+        <span className="whitespace-pre-wrap break-words">{entry.description}</span>
+        {entry.evidenceLink ? (
+          <a
+            href={entry.evidenceLink}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
+          >
+            <ExternalLink size={10} aria-hidden="true" /> Evidence
+          </a>
+        ) : null}
+      </td>
+      <td className="px-3 py-2.5">
+        <ActivityStatusBadge status={status} />
+      </td>
+      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">{activityLocationLabel(entry.workLocation)}</td>
+      <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#17172F]">
+        {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
+        {entry.overtimeMinutes > 0 ? (
+          <span
+            className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
+            title="Includes overtime"
+          >
+            OT
+          </span>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
+function ActivityTaskRows({
+  item,
+  open,
+  onToggle,
+}: {
+  item: HierarchyTask;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { task } = item;
+  const directEntries = item.entries.filter((entry) => !entry.subtaskId);
+  const sortedEntries = [...item.entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const intervalsTitle = sortedEntries
+    .map((entry) => `${formatTime(entry.startAt)} – ${formatTime(entry.endAt)}`)
+    .join("\n");
+  const taskTimeLabel =
+    item.entries.length === 1
+      ? `${formatTime(item.entries[0].startAt)} – ${formatTime(item.entries[0].endAt)}`
+      : `${item.entries.length} ${item.entries.length === 1 ? "entry" : "entries"}`;
+  return (
+    <>
+      <tr className="bg-[#F5F2FD] align-top">
+        <td className="whitespace-nowrap px-3 py-2.5" title={item.entries.length > 1 ? intervalsTitle : undefined}>
+          <span className="block text-xs font-semibold text-[#17172F]">{taskTimeLabel}</span>
+        </td>
+        <td className="px-3 py-2.5">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            className="flex w-full items-center gap-1.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+          >
+            <ChevronDown
+              size={14}
+              aria-hidden="true"
+              className={`shrink-0 text-[#DC2626] transition-transform ${open ? "" : "-rotate-90"}`}
+            />
+            <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
+            <span className="break-words text-xs font-bold text-[#17172F]">{task.title}</span>
+          </button>
+          {item.entryCount > 1 ? (
+            <span className="mt-0.5 block pl-6 text-[10px] font-medium text-[#8B8B9A]">
+              {item.entryCount} work {item.entryCount === 1 ? "entry" : "entries"}
+            </span>
+          ) : null}
+        </td>
+        <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
+          {open ? <span className="whitespace-pre-wrap break-words">{task.description ?? "—"}</span> : <span className="text-[#8B8B9A]">—</span>}
+        </td>
+        <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
+        <td className="px-3 py-2.5">
+          <ActivityStatusBadge status={task.currentStatus} />
+        </td>
+        <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
+        <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-bold text-[#17172F]">
+          {item.minutes > 0 ? formatMinutes(item.minutes) : "—"}
+        </td>
+      </tr>
+      {open ? (
+        <>
+          {item.subtasks.map((sub) => (
+            <Fragment key={sub.subtask.id}>
+              <tr className="bg-[#FBFAFE] align-top">
+                <td className="whitespace-nowrap px-3 py-2">
+                  <span className="block text-[11px] font-semibold text-[#39364F]">
+                    {sub.entries.length > 0
+                      ? `${sub.entries.length} ${sub.entries.length === 1 ? "entry" : "entries"}`
+                      : "—"}
+                  </span>
+                </td>
+                <td className="px-3 py-2 pl-9 text-xs font-semibold text-[#39364F]">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-3.5 w-px bg-[#D8D0F2]" aria-hidden="true" />
+                    <span className="break-words">{sub.subtask.title}</span>
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 text-xs leading-5 text-[#777A91]">
+                  <span className="whitespace-pre-wrap break-words">{sub.subtask.description ?? "—"}</span>
+                </td>
+                <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
+                <td className="px-3 py-2.5">
+                  <ActivityStatusBadge status={sub.subtask.status} />
+                </td>
+                <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#53506B]">
+                  —
+                </td>
+              </tr>
+              {sub.entries.map((entry) => (
+                <ActivityEntryRow key={entry.id} entry={entry} name={sub.subtask.title} status={sub.subtask.status} />
+              ))}
+            </Fragment>
+          ))}
+          {directEntries.map((entry) => (
+            <ActivityEntryRow key={entry.id} entry={entry} name={task.title} status={task.currentStatus} />
+          ))}
+        </>
+      ) : (
+        sortedEntries.map((entry) => {
+          const sub = entry.subtaskId
+            ? item.subtasks.find((candidate) => candidate.subtask.id === entry.subtaskId)
+            : undefined;
+          return (
+            <ActivityEntryRow
+              key={entry.id}
+              entry={entry}
+              name={sub ? sub.subtask.title : task.title}
+              status={sub ? sub.subtask.status : task.currentStatus}
+            />
+          );
+        })
+      )}
+    </>
+  );
+}
+
 function EmployeeDrawer({
   db,
   employee,
@@ -602,48 +899,30 @@ function EmployeeDrawer({
 }) {
   const [viewDate, setViewDate] = useState(dateKey);
   const [syncedKey, setSyncedKey] = useState(`${employee.id}:${dateKey}`);
+  const [closedTasks, setClosedTasks] = useState<ReadonlySet<string>>(() => new Set());
   const syncKey = `${employee.id}:${dateKey}`;
   if (syncKey !== syncedKey) {
     setSyncedKey(syncKey);
     setViewDate(dateKey);
+    setClosedTasks(new Set());
   }
 
+  const toggleTask = (taskId: string) => {
+    setClosedTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
   const day = getDaySummary(db, employee.id, viewDate, new Date());
-  const timeline = [
-    ...day.entries.map((entry) => ({ kind: "entry" as const, at: entry.startAt, entry })),
+  const hierarchy = buildEmployeeHierarchy(db, employee.id, viewDate);
+
+  const blocks = [
+    ...(hierarchy?.tasks ?? []).map((item) => ({ kind: "task" as const, at: item.firstStartAt, item })),
     ...day.breaks.map((brk) => ({ kind: "break" as const, at: brk.startAt, brk })),
   ].sort((a, b) => a.at.localeCompare(b.at));
-
-  const referencedTaskIds = new Set(day.entries.map((e) => e.taskId));
-  const referencedTasks = db.tasks.filter((t) => referencedTaskIds.has(t.id));
-  const taskCounts = {
-    done: referencedTasks.filter((t) => t.currentStatus === "done").length,
-    ongoing: referencedTasks.filter((t) => t.currentStatus === "ongoing").length,
-    blocked: referencedTasks.filter((t) => t.currentStatus === "blocked").length,
-    dropped: referencedTasks.filter((t) => t.currentStatus === "dropped").length,
-  };
-
-  const completedTasks = db.tasks.filter((t) => t.employeeId === employee.id && t.currentStatus === "done");
-  const taskStatusOf = (taskId: string): TaskStatus => getTaskById(db, taskId)?.currentStatus ?? "ongoing";
-  const employeeTaskIds = new Set(db.tasks.filter((t) => t.employeeId === employee.id).map((t) => t.id));
-  const statusEvents = db.statusHistory
-    .filter((e) => employeeTaskIds.has(e.taskId))
-    .slice()
-    .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
-  const [noteFor, setNoteFor] = useState<string | null>(null);
-  const [note, setNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const review = (taskId: string, status: "accepted" | "needs_changes", reviewNote?: string) => {
-    const result = setManagementReview(taskId, status, reviewNote);
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    setError(null);
-    setNoteFor(null);
-    setNote("");
-  };
 
   return (
     <div
@@ -656,7 +935,7 @@ function EmployeeDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={`${employee.name} work details`}
-        className="flex h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:w-[70vw] sm:max-w-[720px] sm:rounded-l-2xl lg:w-[62vw] lg:max-w-[1000px]"
+        className="m-2 flex h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:m-4 sm:h-[calc(100dvh-2rem)] sm:w-[min(84vw,1400px)] sm:min-w-[min(900px,84vw)]"
       >
         <header className="flex shrink-0 items-center gap-3 border-b border-[#EEEAF2] px-4 py-3 sm:px-6">
           <Avatar name={employee.name} avatarUrl={employee.avatarUrl} size={40} />
@@ -706,211 +985,103 @@ function EmployeeDrawer({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 sm:px-6">
-          <p className="mb-2 text-xs font-semibold text-[#39364F]">
-            {day.entries.length} work {day.entries.length === 1 ? "entry" : "entries"}
-            {day.overtimeMinutes > 0 ? ` · ${formatMinutes(day.overtimeMinutes)} overtime` : ""}
-          </p>
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-[#EEEAF2] px-4 py-3 sm:px-6 lg:grid-cols-4">
+          <ActivityMetricCard
+            icon={<Clock size={15} aria-hidden="true" />}
+            label="Total Work Time"
+            value={formatMinutes(day.workMinutes)}
+          />
+          <ActivityMetricCard
+            icon={<Coffee size={15} aria-hidden="true" />}
+            label="Break Time"
+            value={formatMinutes(day.breakMinutes)}
+          />
+          <ActivityMetricCard
+            icon={<Zap size={15} aria-hidden="true" />}
+            label="Overtime"
+            value={formatMinutes(day.overtimeMinutes)}
+          />
+          <ActivityMetricCard
+            icon={<FileText size={15} aria-hidden="true" />}
+            label="Work Entries"
+            value={String(day.entries.length)}
+          />
+        </div>
 
-          <h3 className="mb-2 text-[13px] font-semibold text-[#39364F]">Work log</h3>
-          {timeline.length === 0 ? (
-            <p className="rounded-xl bg-[#F7F7FC] px-4 py-5 text-center text-sm text-[#777A91]">
-              {day.isFuture ? "This date is in the future." : "No work or break records for this day."}
-            </p>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-[#E7E6F0]">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="bg-[#F7F7FC] text-[10px] font-semibold uppercase tracking-wide text-[#8B8B9A]">
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Time</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Type</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Task</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Description</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Location</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2">Task status</th>
-                    <th scope="col" className="border-b border-[#E7E6F0] px-3 py-2 text-right">Overtime</th>
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-4 py-3 sm:px-6">
+          <div className="overflow-x-auto rounded-xl border border-[#E7E6F0]">
+            <table className="w-full min-w-[860px] border-collapse text-left">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-[#F1EDFB] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#5C5478]">
+                  <th scope="col" className="px-3 py-2.5">
+                    Time
+                  </th>
+                  <th scope="col" className="px-3 py-2.5">
+                    Task / Subtask
+                  </th>
+                  <th scope="col" className="px-3 py-2.5">
+                    Task Description
+                  </th>
+                  <th scope="col" className="px-3 py-2.5">
+                    Work Performed (This Period)
+                  </th>
+                  <th scope="col" className="px-3 py-2.5">
+                    Status
+                  </th>
+                  <th scope="col" className="px-3 py-2.5">
+                    Location
+                  </th>
+                  <th scope="col" className="px-3 py-2.5 text-right">
+                    Duration
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {blocks.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-12 text-center text-sm text-[#777A91]">
+                      No work entries recorded for this date.
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-[#F1F0F6]">
-                  {timeline.map((item) =>
-                    item.kind === "entry" ? (
-                      <tr key={item.entry.id} className="align-top">
-                        <td className="whitespace-nowrap px-3 py-2.5">
-                          <span className="block text-xs font-semibold text-[#17172F]">
-                            {formatTime(item.entry.startAt)} – {formatTime(item.entry.endAt)}
-                          </span>
-                          <span className="block text-[10px] font-medium text-[#A6A3BC]">
-                            {formatMinutes(durationMinutes(item.entry.startAt, item.entry.endAt))}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 text-[11px] font-semibold text-[#5A3ED0]">Work</td>
-                        <td className="max-w-[220px] px-3 py-2.5 text-xs font-semibold text-[#17172F]">
-                          <span className="break-words">{getTaskById(db, item.entry.taskId)?.title ?? "Task"}</span>
-                        </td>
-                        <td className="max-w-[300px] px-3 py-2.5 text-xs leading-5 text-[#53506B]">
-                          <span className="whitespace-pre-wrap break-words">{item.entry.description}</span>
-                          {item.entry.evidenceLink ? (
-                            <a
-                              href={item.entry.evidenceLink}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
-                            >
-                              <ExternalLink size={10} aria-hidden="true" /> Evidence
-                            </a>
-                          ) : null}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-[11px] text-[#53506B]">
-                          {WORK_LOCATION_LABELS[item.entry.workLocation]}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <StatusBadge
-                            status={taskStatusOf(item.entry.taskId)}
-                            label={STATUS_LABELS_SHORT[taskStatusOf(item.entry.taskId)]}
-                          />
-                        </td>
-                        <td
-                          className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-semibold text-[#B45309]"
-                          title={item.entry.isReportedOvertime ? "Reported overtime" : undefined}
-                        >
-                          {item.entry.overtimeMinutes > 0 ? formatMinutes(item.entry.overtimeMinutes) : "—"}
-                        </td>
-                      </tr>
-                    ) : (
-                      <tr key={item.brk.id} className="bg-[#FFF9ED] align-top">
+                ) : (
+                  blocks.map((block) =>
+                    block.kind === "break" ? (
+                      <tr key={`break-${block.brk.id}`} className="border-t border-[#F6E7CF] bg-[#FFF9ED] align-top">
                         <td className="whitespace-nowrap px-3 py-2.5">
                           <span className="block text-xs font-semibold text-[#8A5A00]">
-                            {formatTime(item.brk.startAt)} – {item.brk.endAt ? formatTime(item.brk.endAt) : "In progress"}
+                            {formatTime(block.brk.startAt)} –{" "}
+                            {block.brk.endAt ? formatTime(block.brk.endAt) : "In progress"}
                           </span>
-                          {item.brk.endAt ? (
-                            <span className="block text-[10px] font-medium text-[#C99B4A]">
-                              {formatMinutes(durationMinutes(item.brk.startAt, item.brk.endAt))}
-                            </span>
-                          ) : null}
                         </td>
-                        <td className="px-3 py-2.5 text-[11px] font-semibold text-[#B45309]">Break</td>
+                        <td className="px-3 py-2.5">
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#B45309]">
+                            <Coffee size={12} aria-hidden="true" />
+                            Break
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-xs text-[#8A5A00]">—</td>
+                        <td className="px-3 py-2.5 text-xs italic text-[#8A5A00]">Break</td>
                         <td className="px-3 py-2.5 text-xs text-[#8A5A00]">—</td>
                         <td className="px-3 py-2.5 text-xs text-[#8A5A00]">—</td>
-                        <td className="px-3 py-2.5 text-[11px] text-[#8A5A00]">—</td>
-                        <td className="px-3 py-2.5 text-[11px] text-[#8A5A00]">—</td>
-                        <td className="px-3 py-2.5 text-right text-[11px] text-[#8A5A00]">—</td>
+                        <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#8A5A00]">
+                          {block.brk.endAt
+                            ? formatMinutes(durationMinutes(block.brk.startAt, block.brk.endAt))
+                            : "—"}
+                        </td>
                       </tr>
-                    )
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <dl className="mb-3 mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <DrawerStat label="Work time" value={formatMinutes(day.workMinutes)} />
-            <DrawerStat label="Break time" value={formatMinutes(day.breakMinutes)} />
-            <DrawerStat label="Overtime" value={formatMinutes(day.overtimeMinutes)} />
-            <DrawerStat label="Office" value={formatMinutes(day.officeMinutes)} />
-            <DrawerStat label="Home" value={formatMinutes(day.homeMinutes)} />
-            <DrawerStat label="Entries" value={String(day.entries.length)} />
-            <DrawerStat label="Tasks done" value={String(taskCounts.done)} />
-            <DrawerStat label="Tasks ongoing" value={String(taskCounts.ongoing)} />
-            <DrawerStat label="Tasks blocked" value={String(taskCounts.blocked)} />
-            <DrawerStat label="Tasks dropped" value={String(taskCounts.dropped)} />
-          </dl>
-
-          <section className="mt-4 border-t border-[#EEEAF2] pt-3">
-            <h3 className="mb-2 text-[13px] font-semibold text-[#39364F]">Completed tasks</h3>
-            {completedTasks.length === 0 ? (
-              <p className="text-[13px] text-[#777A91]">No completed tasks.</p>
-            ) : (
-              <ul className="space-y-2">
-                {completedTasks.map((t) => (
-                  <li key={t.id} className="rounded-xl border border-[#E7E6F0] p-3">
-                    <p className="text-sm font-semibold text-[#17172F]">{t.title}</p>
-                    <p className="mt-0.5 text-[11px] text-[#777A91]">
-                      Review:{" "}
-                      {t.managementReview
-                        ? t.managementReview.status === "accepted"
-                          ? "Accepted"
-                          : `Needs changes — ${t.managementReview.note ?? ""}`
-                        : "Not reviewed"}
-                    </p>
-                    {noteFor === t.id ? (
-                      <div className="mt-2 space-y-2">
-                        <textarea
-                          value={note}
-                          onChange={(e) => setNote(e.target.value)}
-                          rows={2}
-                          aria-label="Reason for changes"
-                          className="w-full rounded-lg border border-[#E7E6F0] p-2 text-base text-[#17172F] outline-none focus:border-[#6C45F5] lg:text-[13px]"
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => review(t.id, "needs_changes", note)}
-                            className="rounded-lg bg-[#F59E0B] px-3 py-1.5 text-xs font-semibold text-white"
-                          >
-                            Send
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNoteFor(null);
-                              setNote("");
-                            }}
-                            className="rounded-lg px-3 py-1.5 text-xs font-semibold text-[#53506B]"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
                     ) : (
-                      <div className="mt-2 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => review(t.id, "accepted")}
-                          className="rounded-lg bg-[#6C45F5] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#5935DE]"
-                        >
-                          Accept
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setNoteFor(t.id)}
-                          className="rounded-lg border border-[#E7E6F0] px-3 py-1.5 text-xs font-semibold text-[#53506B]"
-                        >
-                          Needs changes
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {error ? <p role="alert" className="mt-2 text-xs text-[#B43A3A]">{error}</p> : null}
-          </section>
-
-          {statusEvents.length > 0 ? (
-            <section className="mt-4 border-t border-[#EEEAF2] pt-3">
-              <h3 className="mb-2 text-[13px] font-semibold text-[#39364F]">Status changes</h3>
-              <ol className="space-y-1.5">
-                {statusEvents.map((e) => {
-                  const task = getTaskById(db, e.taskId);
-                  return (
-                    <li key={e.id} className="flex items-baseline justify-between gap-3 rounded-lg bg-[#F7F7FC] px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-semibold text-[#17172F]">{task?.title ?? "Task"}</p>
-                        <p className="text-[11px] text-[#777A91]">
-                          {e.previousStatus ? `${STATUS_LABELS_SHORT[e.previousStatus]} → ` : ""}
-                          <StatusBadge status={e.newStatus} label={STATUS_LABELS_SHORT[e.newStatus]} />
-                          {e.changeNote ? ` — ${e.changeNote}` : ""}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-[10px] font-medium text-[#8B8B9A]">
-                        {formatDateLabel(dateKeyOf(e.changedAt))} {formatTime(e.changedAt)}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ol>
-            </section>
-          ) : null}
+                      <ActivityTaskRows
+                        key={block.item.task.id}
+                        item={block.item}
+                        open={!closedTasks.has(block.item.task.id)}
+                        onToggle={() => toggleTask(block.item.task.id)}
+                      />
+                    )
+                  )
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[#EEEAF2] px-4 py-2.5 sm:px-6">
@@ -919,22 +1090,13 @@ function EmployeeDrawer({
             type="button"
             onClick={onExport}
             disabled={exporting}
-            className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#E7E6F0] px-3.5 text-xs font-semibold text-[#5A3ED0] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] disabled:opacity-50"
+            className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#6C45F5] px-4 text-xs font-semibold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] focus-visible:ring-offset-2 disabled:opacity-50"
           >
             <Download size={14} aria-hidden="true" />
-            {exporting ? "Preparing…" : "Export this day"}
+            {exporting ? "Preparing…" : "Export This Day"}
           </button>
         </footer>
       </aside>
-    </div>
-  );
-}
-
-function DrawerStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-[#F7F7FC] px-3 py-2">
-      <dt className="text-[10px] font-medium text-[#8B8B9A]">{label}</dt>
-      <dd className="mt-0.5 text-sm font-bold text-[#17172F]">{value}</dd>
     </div>
   );
 }

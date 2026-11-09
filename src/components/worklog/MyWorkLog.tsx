@@ -4,6 +4,7 @@ import { MobileStaffWorkspace } from "./MobileStaffWorkspace";
 import { DesktopStaffWorkspace } from "./DesktopStaffWorkspace";
 import { RecordsDialog } from "./RecordsDialog";
 import { TaskDetailsDialog } from "./TaskDetailsDialog";
+import { UpdateProgressDialog } from "./UpdateProgressDialog";
 import { ViewportDebug } from "./ViewportDebug";
 import { useWorkLogController } from "./useWorkLogController";
 
@@ -20,6 +21,7 @@ export function MyWorkLog() {
       <DesktopStaffWorkspace c={controller} />
       <RecordsDialog c={controller} />
       <TaskDetailsDialog c={controller} />
+      <UpdateProgressDialog c={controller} />
       <ViewportDebug />
       {controller.notice ? (
         <div

@@ -19,6 +19,7 @@ export const WORK_LOCATION_LABELS = {
   office: "Office",
   home: "Home",
   other: "Other",
+  unknown: "Unknown",
 } as const;
 
 export const TASK_STATUS_LABELS = {

@@ -26,12 +26,20 @@ import {
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
 import { InviteChairman } from "../InviteChairman";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
-import { EXERCISE_END, EXERCISE_START } from "@/lib/worklog/seed";
 import { getDaySummary } from "@/lib/worklog/selectors";
 import { formatDateLabel, formatMinutes } from "@/lib/worklog/time";
 import { getZonedDateKey, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import type { Employee } from "@/lib/worklog/types";
 import type { DaySummary } from "@/lib/worklog/selectors";
+import {
+  buildEmployeeHierarchy,
+  getRecoveredDaySummary,
+  LegacyTaskList,
+  RecoveredDayPanel,
+  TaskGroupList,
+  VerificationBadge,
+  type EmployeeHierarchy,
+} from "../TaskHierarchy";
 import { EmployeeDetailMobile, DateSheet } from "./EmployeeDetail";
 import {
   Avatar,
@@ -39,12 +47,12 @@ import {
   LOCATION_LABELS,
   MetricCard,
   SheetOption,
-  pad2,
   primaryLocation,
   shiftDateKey,
 } from "./shared";
 
 type MobileFilter = "all" | "logged" | "none" | "overtime" | "office" | "home" | "break";
+type MobileView = "staff" | "tasks";
 
 const FILTER_OPTIONS: { id: MobileFilter; label: string }[] = [
   { id: "all", label: "All staff" },
@@ -55,9 +63,6 @@ const FILTER_OPTIONS: { id: MobileFilter; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "break", label: "On break" },
 ];
-
-const EXERCISE_START_KEY = `${EXERCISE_START.year}-${pad2(EXERCISE_START.month)}-${pad2(EXERCISE_START.day)}`;
-const EXERCISE_END_KEY = `${EXERCISE_END.year}-${pad2(EXERCISE_END.month)}-${pad2(EXERCISE_END.day)}`;
 
 interface MobileEmployeeRow {
   employee: Employee;
@@ -80,6 +85,7 @@ export function ExecutiveMobile() {
   const canEditProfile = Boolean(meEmployee) && getSessionRole() !== "chairman";
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
   const [dateKey, setDateKey] = useState<string | null>(null);
+  const [boardView, setBoardView] = useState<MobileView>("staff");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -94,7 +100,7 @@ export function ExecutiveMobile() {
   const todayKey = getZonedDateKey(now);
   const activeKey = dateKey ?? todayKey;
   const selected = db.employees.find((e) => e.id === selectedId) ?? null;
-  const outsideExercise = activeKey < EXERCISE_START_KEY || activeKey > EXERCISE_END_KEY;
+
 
   const rows = useMemo<MobileEmployeeRow[]>(
     () =>
@@ -123,6 +129,21 @@ export function ExecutiveMobile() {
       case "break": return onBreak;
     }
   });
+
+  const hierarchies = useMemo(
+    () =>
+      db.employees
+        .map((employee) => buildEmployeeHierarchy(db, employee.id, activeKey))
+        .filter((hierarchy): hierarchy is EmployeeHierarchy => hierarchy !== null),
+    [db, activeKey]
+  );
+  const hierarchyById = new Map(hierarchies.map((hierarchy) => [hierarchy.employee.id, hierarchy]));
+  const visibleHierarchies = visibleRows
+    .map(({ employee }) => hierarchyById.get(employee.id))
+    .filter((hierarchy): hierarchy is EmployeeHierarchy => Boolean(hierarchy));
+  const visibleTaskItems = visibleHierarchies.flatMap((hierarchy) => hierarchy.tasks);
+  const visibleLegacyTasks = visibleHierarchies.flatMap((hierarchy) => hierarchy.legacyTasks);
+  const recovered = useMemo(() => getRecoveredDaySummary(db, activeKey), [db, activeKey]);
 
   const recordedWork = rows.reduce((s, r) => s + r.day.entries.length, 0);
   const inOffice = rows.filter((r) => r.location === "office").length;
@@ -235,11 +256,28 @@ export function ExecutiveMobile() {
           </button>
         </div>
 
-        {outsideExercise ? (
-          <p className="mt-3 rounded-2xl border border-[#F3C56B] bg-[#FFF6E5] px-4 py-2.5 text-[11px] font-medium text-[#8A5A00]">
-            Outside the work exercise ({formatDateLabel(EXERCISE_START_KEY)} – {formatDateLabel(EXERCISE_END_KEY)}).
-          </p>
-        ) : null}
+        {/* Board view */}
+        <div
+          role="group"
+          aria-label="Board view"
+          className="mt-3 grid grid-cols-2 gap-1 rounded-2xl bg-[#ECEAF6] p-1"
+        >
+          {(["staff", "tasks"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={boardView === option}
+              onClick={() => setBoardView(option)}
+              className={`min-h-9 rounded-xl text-[12px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] ${
+                boardView === option ? "bg-white text-[#4F31D0] shadow-sm" : "text-[#666783] hover:text-[#17172B]"
+              }`}
+            >
+              {option === "staff" ? "By Staff" : "By Tasks"}
+            </button>
+          ))}
+        </div>
+
+        {recovered ? <RecoveredDayPanel summary={recovered} dateKey={activeKey} className="mt-3" /> : null}
 
         {/* Summary cards */}
         <section aria-label="Daily summary" className="mt-4 grid grid-cols-2 gap-2.5">
@@ -272,7 +310,9 @@ export function ExecutiveMobile() {
         {/* Team list */}
         <section className="mt-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-[15px] font-bold text-[#17172B]">Team ({visibleRows.length})</h2>
+            <h2 className="text-[15px] font-bold text-[#17172B]">
+              {boardView === "staff" ? `Team (${visibleRows.length})` : `Tasks (${visibleTaskItems.length})`}
+            </h2>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -336,8 +376,12 @@ export function ExecutiveMobile() {
             </button>
           ) : null}
 
+          {boardView === "staff" ? (
           <ul className="mt-3 space-y-2.5">
-            {visibleRows.map(({ employee, day, tasksRecorded, location }) => (
+            {visibleRows.map(({ employee, day, tasksRecorded, location }) => {
+              const hierarchy = hierarchyById.get(employee.id);
+              const taskCount = hierarchy?.tasks.length ?? 0;
+              return (
               <li key={employee.id}>
                 <button
                   type="button"
@@ -348,19 +392,24 @@ export function ExecutiveMobile() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-bold text-[#17172B]">{employee.name}</span>
                     <span className="block truncate text-[12px] text-[#666783]">{employee.role}</span>
-                    <span className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#9292A8]">
+                    <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] font-medium text-[#9292A8]">
                       {day.entries.length === 0 ? (
                         <span>No work logged</span>
                       ) : (
                         <>
-                          <span>{tasksRecorded} task{tasksRecorded === 1 ? "" : "s"}</span>
+                          <span>{day.entries.length} {day.entries.length === 1 ? "entry" : "entries"}</span>
                           <span aria-hidden="true">·</span>
                           <span>{formatMinutes(day.workMinutes)}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{tasksRecorded} task{tasksRecorded === 1 ? "" : "s"}</span>
                           <span aria-hidden="true">·</span>
                           <span className="inline-flex items-center gap-1">
                             <LocationGlyph location={location} />
                             {LOCATION_LABELS[location]}
                           </span>
+                          {taskCount > 0 && hierarchy ? (
+                            <VerificationBadge verification={hierarchy.verification} />
+                          ) : null}
                         </>
                       )}
                     </span>
@@ -368,13 +417,24 @@ export function ExecutiveMobile() {
                   <ChevronRight size={17} className="shrink-0 text-[#C9C6D8]" aria-hidden="true" />
                 </button>
               </li>
-            ))}
+              );
+            })}
             {visibleRows.length === 0 ? (
               <li className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-8 text-center text-[13px] text-[#666783]">
                 No employees match this search.
               </li>
             ) : null}
           </ul>
+          ) : (
+            <div className="mt-3 space-y-4">
+              <TaskGroupList
+                items={visibleTaskItems}
+                showEmployee
+                emptyMessage="No timed tasks for this date."
+              />
+              <LegacyTaskList tasks={visibleLegacyTasks} />
+            </div>
+          )}
         </section>
 
         {exportError ? <p role="alert" className="mt-3 text-xs text-[#B43A3A]">{exportError}</p> : null}
@@ -460,7 +520,7 @@ export function ExecutiveMobile() {
             onClick={() => setExportSheetOpen(false)}
             className="flex min-h-11 items-center justify-between rounded-xl px-3.5 text-sm font-semibold text-[#17172B] transition hover:bg-[#F7F6FC]"
           >
-            Date range or full exercise
+            Date range export
             <ChevronRight size={15} className="text-[#9292A8]" aria-hidden="true" />
           </Link>
         </div>

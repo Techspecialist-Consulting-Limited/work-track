@@ -24,9 +24,17 @@ import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { getDaySummary, getTaskById, type DaySummary } from "@/lib/worklog/selectors";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime12 } from "@/lib/worklog/time";
 import type { BreakEntry, Employee, Task, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
+import {
+  buildEmployeeHierarchy,
+  LegacyTaskList,
+  TaskGroupList,
+  VerificationBadge,
+  verificationOf,
+  type EmployeeHierarchy,
+} from "../TaskHierarchy";
 import { Avatar, BottomSheet, MetricCard, SheetOption, dateKeyParts, pad2, primaryLocation, LOCATION_LABELS, shiftDateKey } from "./shared";
 
-type DetailTab = "overview" | "history" | "breaks" | "overtime";
+type DetailTab = "overview" | "tasks" | "history" | "breaks" | "overtime";
 type HistoryFilter = "all" | "work" | "breaks" | "overtime";
 type TimelineItem =
   | { kind: "entry"; at: string; entry: WorkEntry }
@@ -34,7 +42,8 @@ type TimelineItem =
 
 const TABS: { id: DetailTab; label: string }[] = [
   { id: "overview", label: "Overview" },
-  { id: "history", label: "Work History" },
+  { id: "tasks", label: "Tasks" },
+  { id: "history", label: "History" },
   { id: "breaks", label: "Breaks" },
   { id: "overtime", label: "Overtime" },
 ];
@@ -51,7 +60,7 @@ function LocationIcon({ location, size = 13 }: { location: ReturnType<typeof pri
   if (location === "office") return <Building2 size={size} className={cls} aria-hidden="true" />;
   if (location === "home") return <Home size={size} className={cls} aria-hidden="true" />;
   if (location === "mixed") return <ArrowLeftRight size={size} className={cls} aria-hidden="true" />;
-  if (location === "other") return <MapPin size={size} className={cls} aria-hidden="true" />;
+  if (location === "other" || location === "unknown") return <MapPin size={size} className={cls} aria-hidden="true" />;
   return null;
 }
 
@@ -89,6 +98,7 @@ export function EmployeeDetailMobile({
 
   const now = useMemo(() => new Date(), []);
   const day = getDaySummary(db, employee.id, viewDate, now);
+  const hierarchy = buildEmployeeHierarchy(db, employee.id, viewDate);
   const location = primaryLocation(day);
 
   const tasksRecorded = new Set(day.entries.map((e) => e.taskId)).size;
@@ -184,6 +194,11 @@ export function EmployeeDetailMobile({
                 <Clock size={12} aria-hidden="true" />
                 Total: {formatMinutes(day.workMinutes)}
               </p>
+              {hierarchy && hierarchy.tasks.length > 0 ? (
+                <span className="mt-1.5 inline-flex">
+                  <VerificationBadge verification={hierarchy.verification} />
+                </span>
+              ) : null}
             </div>
           </section>
 
@@ -220,7 +235,7 @@ export function EmployeeDetailMobile({
           <div
             role="tablist"
             aria-label="Employee detail sections"
-            className="mt-4 grid grid-cols-4 gap-1 rounded-2xl bg-[#ECEAF6] p-1"
+            className="mt-4 grid grid-cols-5 gap-1 rounded-2xl bg-[#ECEAF6] p-1"
           >
             {TABS.map((t) => (
               <button
@@ -229,7 +244,7 @@ export function EmployeeDetailMobile({
                 role="tab"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}
-                className={`min-h-10 rounded-xl px-1 text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] sm:text-xs ${
+                className={`min-h-10 rounded-xl px-0.5 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] sm:text-xs ${
                   tab === t.id ? "bg-[#6040E8] text-white shadow-sm" : "text-[#666783] hover:text-[#17172B]"
                 }`}
               >
@@ -248,6 +263,8 @@ export function EmployeeDetailMobile({
                 taskMinutesOnDay={taskMinutesOnDay}
                 onViewHistory={showWorkHistory}
               />
+            ) : tab === "tasks" ? (
+              <TasksTab hierarchy={hierarchy} />
             ) : tab === "history" ? (
               <HistoryTab
                 timeline={timeline}
@@ -298,6 +315,32 @@ export function EmployeeDetailMobile({
           ))}
         </div>
       </BottomSheet>
+    </div>
+  );
+}
+
+function TasksTab({ hierarchy }: { hierarchy: EmployeeHierarchy | null }) {
+  if (!hierarchy) {
+    return (
+      <p className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-6 text-center text-[13px] text-[#666783]">
+        This employee could not be found.
+      </p>
+    );
+  }
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-[15px] font-bold text-[#17172B]">Tasks with timed work</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium text-[#9292A8]">
+            {hierarchy.tasks.length} {hierarchy.tasks.length === 1 ? "task" : "tasks"} ·{" "}
+            {hierarchy.day.entries.length} entries
+          </span>
+          {hierarchy.tasks.length > 0 ? <VerificationBadge verification={hierarchy.verification} /> : null}
+        </div>
+      </div>
+      <TaskGroupList items={hierarchy.tasks} emptyMessage="No timed tasks for this date." />
+      <LegacyTaskList tasks={hierarchy.legacyTasks} className="mt-5" />
     </div>
   );
 }
@@ -481,6 +524,7 @@ function HistoryTab({
 function WorkRow({ db, entry }: { db: WorkLogDatabase; entry: WorkEntry }) {
   const isOvertime = entry.overtimeMinutes > 0;
   const task = getTaskById(db, entry.taskId);
+  const verification = task ? verificationOf(task) : null;
   return (
     <li className="flex items-center gap-3 px-4 py-3">
       <span
@@ -506,6 +550,9 @@ function WorkRow({ db, entry }: { db: WorkLogDatabase; entry: WorkEntry }) {
             {entry.isReportedOvertime ? " · Reported" : ""}
           </span>
           <StatusBadge status={task?.currentStatus ?? "ongoing"} className="shrink-0" />
+          {verification && verification.level !== "verified" ? (
+            <VerificationBadge verification={verification} className="shrink-0" />
+          ) : null}
         </p>
       </div>
       <span className="shrink-0 text-[12px] font-bold text-[#17172B]">
