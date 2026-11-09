@@ -3,69 +3,228 @@
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
-  ArrowLeftRight,
-  Building2,
   Calendar,
-  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ClipboardCheck,
   Clock,
   Coffee,
   Download,
-  Home,
-  ListOrdered,
-  MapPin,
+  ExternalLink,
+  FileText,
+  Folder,
+  Zap,
 } from "lucide-react";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
-import { StatusBadge } from "@/components/worklog/StatusBadge";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
-import { getDaySummary, getTaskById, type DaySummary } from "@/lib/worklog/selectors";
-import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime12 } from "@/lib/worklog/time";
-import type { BreakEntry, Employee, Task, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
-import {
-  buildEmployeeHierarchy,
-  LegacyTaskList,
-  TaskGroupList,
-  VerificationBadge,
-  verificationOf,
-  type EmployeeHierarchy,
-} from "../TaskHierarchy";
-import { Avatar, BottomSheet, MetricCard, SheetOption, dateKeyParts, pad2, primaryLocation, LOCATION_LABELS, shiftDateKey } from "./shared";
+import { getDaySummary } from "@/lib/worklog/selectors";
+import { durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
+import type { BreakEntry, Employee, TaskStatus, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
+import { buildEmployeeHierarchy, type HierarchyTask } from "../TaskHierarchy";
+import { Avatar, BottomSheet, MetricCard, dateKeyParts, pad2, shiftDateKey } from "./shared";
 
-type DetailTab = "overview" | "tasks" | "history" | "breaks" | "overtime";
-type HistoryFilter = "all" | "work" | "breaks" | "overtime";
-type TimelineItem =
-  | { kind: "entry"; at: string; entry: WorkEntry }
-  | { kind: "break"; at: string; brk: BreakEntry };
+const STATUS_LABELS_SHORT: Record<TaskStatus, string> = {
+  ongoing: "Ongoing",
+  done: "Done",
+  blocked: "Blocked",
+  dropped: "Dropped",
+};
 
-const TABS: { id: DetailTab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "tasks", label: "Tasks" },
-  { id: "history", label: "History" },
-  { id: "breaks", label: "Breaks" },
-  { id: "overtime", label: "Overtime" },
-];
+const ACTIVITY_STATUS_BADGE_CLASSES: Record<TaskStatus, string> = {
+  ongoing: "bg-[#EFF6FF] text-[#1D4ED8]",
+  done: "bg-[#ECFDF5] text-[#047857]",
+  blocked: "bg-[#FFFBEB] text-[#B45309]",
+  dropped: "bg-[#F1F1F5] text-[#6B6B7E]",
+};
 
-const HISTORY_FILTERS: { id: HistoryFilter; label: string }[] = [
-  { id: "all", label: "All Records" },
-  { id: "work", label: "Work" },
-  { id: "breaks", label: "Breaks" },
-  { id: "overtime", label: "Overtime" },
-];
-
-function LocationIcon({ location, size = 13 }: { location: ReturnType<typeof primaryLocation>; size?: number }) {
-  const cls = "text-[#666783]";
-  if (location === "office") return <Building2 size={size} className={cls} aria-hidden="true" />;
-  if (location === "home") return <Home size={size} className={cls} aria-hidden="true" />;
-  if (location === "mixed") return <ArrowLeftRight size={size} className={cls} aria-hidden="true" />;
-  if (location === "other" || location === "unknown") return <MapPin size={size} className={cls} aria-hidden="true" />;
-  return null;
+function ActivityStatusBadge({ status }: { status: TaskStatus }) {
+  return (
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold leading-4 ${ACTIVITY_STATUS_BADGE_CLASSES[status]}`}
+    >
+      {STATUS_LABELS_SHORT[status]}
+    </span>
+  );
 }
 
-function timeRange(startAt: string, endAt: string | null) {
-  return `${formatTime12(startAt)} – ${endAt ? formatTime12(endAt) : "In progress"}`;
+function activityLocationLabel(location: WorkEntry["workLocation"]): string {
+  return location === "unknown" ? "—" : WORK_LOCATION_LABELS[location];
+}
+
+function ActivityEntryCard({
+  entry,
+  name,
+  status,
+}: {
+  entry: WorkEntry;
+  name: string;
+  status: TaskStatus;
+}) {
+  return (
+    <div className="rounded-xl border border-[#EFEAF6] bg-white px-3 py-2.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[12px] font-semibold text-[#17172B]">
+          {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+        </span>
+        <span className="whitespace-nowrap text-[12px] font-bold text-[#17172B]">
+          {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
+          {entry.overtimeMinutes > 0 ? (
+            <span
+              className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
+              title="Includes overtime"
+            >
+              OT
+            </span>
+          ) : null}
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-[11px] font-medium text-[#39364F]">{name}</span>
+        <ActivityStatusBadge status={status} />
+        <span className="text-[10px] text-[#9292A8]">{activityLocationLabel(entry.workLocation)}</span>
+      </div>
+      <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-[#666783]">{entry.description}</p>
+      {entry.evidenceLink ? (
+        <a
+          href={entry.evidenceLink}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-[#6040E8] hover:underline"
+        >
+          <ExternalLink size={10} aria-hidden="true" /> Evidence
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+function ActivityTaskCard({
+  item,
+  open,
+  onToggle,
+}: {
+  item: HierarchyTask;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { task } = item;
+  const directEntries = item.entries.filter((entry) => !entry.subtaskId);
+  const sortedEntries = [...item.entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const subtaskById = new Map(item.subtasks.map((sub) => [sub.subtask.id, sub]));
+  const timeLabel =
+    item.entries.length === 1
+      ? `${formatTime(item.entries[0].startAt)} – ${formatTime(item.entries[0].endAt)}`
+      : `${item.entries.length} ${item.entries.length === 1 ? "entry" : "entries"}`;
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[#EAE8F2] bg-white shadow-[0_1px_2px_rgba(23,23,43,0.04)]">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 bg-[#F5F1FF] px-3.5 py-3 text-left transition hover:bg-[#F1EDFB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#6040E8]"
+      >
+        <ChevronDown
+          size={15}
+          aria-hidden="true"
+          className={`shrink-0 text-[#DC2626] transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6040E8]" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-bold text-[#17172B]">{task.title}</span>
+          <span className="block truncate text-[11px] font-medium text-[#9292A8]">
+            {timeLabel} · {formatMinutes(item.minutes)}
+          </span>
+        </span>
+        <ActivityStatusBadge status={task.currentStatus} />
+      </button>
+      <div className="space-y-2 p-3">
+        {!open ? (
+          sortedEntries.length === 0 ? (
+            <p className="px-1 py-2 text-[11px] text-[#9292A8]">No work entries recorded.</p>
+          ) : (
+            sortedEntries.map((entry) => {
+              const sub = entry.subtaskId ? subtaskById.get(entry.subtaskId) : undefined;
+              return (
+                <ActivityEntryCard
+                  key={entry.id}
+                  entry={entry}
+                  name={sub ? sub.subtask.title : task.title}
+                  status={sub ? sub.subtask.status : task.currentStatus}
+                />
+              );
+            })
+          )
+        ) : (
+          <>
+            {task.description ? (
+              <p className="whitespace-pre-wrap rounded-lg bg-[#F7F6FC] px-3 py-2 text-[11px] leading-5 text-[#666783]">
+                {task.description}
+              </p>
+            ) : null}
+            {item.subtasks.map((sub) => (
+              <div key={sub.subtask.id} className="overflow-hidden rounded-xl border border-[#EFEAF6]">
+                <div className="flex items-center gap-1.5 border-b border-[#EFEAF6] bg-[#FBFAFE] px-3 py-2">
+                  <span className="h-3.5 w-px bg-[#D8D0F2]" aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11px] font-semibold text-[#39364F]">
+                      {sub.subtask.title}
+                    </span>
+                    {sub.subtask.description ? (
+                      <span className="block truncate text-[10px] text-[#9292A8]">{sub.subtask.description}</span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 text-[10px] font-medium text-[#9292A8]">
+                    {sub.entries.length} {sub.entries.length === 1 ? "entry" : "entries"}
+                  </span>
+                  <ActivityStatusBadge status={sub.subtask.status} />
+                </div>
+                <div className="space-y-2 p-2.5">
+                  {sub.entries.length === 0 ? (
+                    <p className="px-1 py-1 text-[10px] text-[#9292A8]">No work entries recorded.</p>
+                  ) : (
+                    sub.entries.map((entry) => (
+                      <ActivityEntryCard
+                        key={entry.id}
+                        entry={entry}
+                        name={sub.subtask.title}
+                        status={sub.subtask.status}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            ))}
+            {directEntries.map((entry) => (
+              <ActivityEntryCard
+                key={entry.id}
+                entry={entry}
+                name={task.title}
+                status={task.currentStatus}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ActivityBreakCard({ brk }: { brk: BreakEntry }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-2xl border border-[#F6E7CF] bg-[#FFF9ED] px-3.5 py-3">
+      <Coffee size={14} aria-hidden="true" className="shrink-0 text-[#B45309]" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[12px] font-semibold text-[#8A5A00]">
+          Break · {formatTime(brk.startAt)} – {brk.endAt ? formatTime(brk.endAt) : "In progress"}
+        </p>
+        <p className="text-[10px] font-medium text-[#8A5A00]">Not counted as work time</p>
+      </div>
+      <span className="whitespace-nowrap text-[12px] font-semibold text-[#8A5A00]">
+        {brk.endAt ? formatMinutes(durationMinutes(brk.startAt, brk.endAt)) : "—"}
+      </span>
+    </div>
+  );
 }
 
 export function EmployeeDetailMobile({
@@ -83,36 +242,34 @@ export function EmployeeDetailMobile({
 }) {
   const [viewDate, setViewDate] = useState(boardDateKey);
   const [syncedKey, setSyncedKey] = useState(`${employee.id}:${boardDateKey}`);
+  const [openTasks, setOpenTasks] = useState<ReadonlySet<string>>(() => new Set());
+  const [dateSheetOpen, setDateSheetOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const syncKey = `${employee.id}:${boardDateKey}`;
   if (syncKey !== syncedKey) {
     setSyncedKey(syncKey);
     setViewDate(boardDateKey);
+    setOpenTasks(new Set());
   }
 
-  const [tab, setTab] = useState<DetailTab>("overview");
-  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all");
-  const [dateSheetOpen, setDateSheetOpen] = useState(false);
-  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const toggleTask = (taskId: string) => {
+    setOpenTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
 
   const now = useMemo(() => new Date(), []);
   const day = getDaySummary(db, employee.id, viewDate, now);
   const hierarchy = buildEmployeeHierarchy(db, employee.id, viewDate);
-  const location = primaryLocation(day);
 
-  const tasksRecorded = new Set(day.entries.map((e) => e.taskId)).size;
-
-  const completedTasks = useMemo(() => {
-    return db.tasks.filter(
-      (t) => t.employeeId === employee.id && t.currentStatus === "done" && t.completedAt && dateKeyOf(t.completedAt) === viewDate
-    );
-  }, [db.tasks, employee.id, viewDate]);
-
-  const taskMinutesOnDay = (taskId: string) =>
-    day.entries.filter((e) => e.taskId === taskId).reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
-
-  const overtimeEntries = day.entries.filter((e) => e.overtimeMinutes > 0);
+  const blocks = [
+    ...(hierarchy?.tasks ?? []).map((item) => ({ kind: "task" as const, at: item.firstStartAt, item })),
+    ...day.breaks.map((brk) => ({ kind: "break" as const, at: brk.startAt, brk })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
 
   async function exportDay() {
     setExportError(null);
@@ -129,34 +286,6 @@ export function EmployeeDetailMobile({
       setExporting(false);
     }
   }
-
-  function showWorkHistory() {
-    setHistoryFilter("all");
-    setTab("history");
-  }
-
-  const timeline = useMemo(() => {
-    const items = [
-      ...day.entries.map((entry) => ({ kind: "entry" as const, at: entry.startAt, entry })),
-      ...day.breaks.map((brk) => ({ kind: "break" as const, at: brk.startAt, brk })),
-    ].sort((a, b) => a.at.localeCompare(b.at));
-    if (historyFilter === "work") return items.filter((i) => i.kind === "entry");
-    if (historyFilter === "breaks") return items.filter((i) => i.kind === "break");
-    if (historyFilter === "overtime")
-      return items.filter((i) => i.kind === "entry" && i.entry.overtimeMinutes > 0);
-    return items;
-  }, [day.entries, day.breaks, historyFilter]);
-
-  const emptyMessage =
-    historyFilter === "all"
-      ? day.isFuture
-        ? "This date is in the future."
-        : "No work logged for this date."
-      : historyFilter === "work"
-        ? "No work records match this filter."
-        : historyFilter === "breaks"
-          ? "No break records."
-          : "No overtime recorded.";
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#F7F6FC] lg:hidden">
@@ -180,25 +309,12 @@ export function EmployeeDetailMobile({
         <div className="mx-auto w-full max-w-lg px-5 pb-10 pt-5">
           {/* Profile */}
           <section className="flex items-center gap-4">
-            <Avatar name={employee.name} avatarUrl={employee.avatarUrl} size={72} />
+            <Avatar name={employee.name} avatarUrl={employee.avatarUrl} size={64} />
             <div className="min-w-0">
               <h2 className="truncate text-lg font-bold text-[#17172B]">{employee.name}</h2>
               <p className="truncate text-[13px] text-[#666783]">
                 {employee.role} · {employee.department}
               </p>
-              <p className="mt-1 flex items-center gap-1.5 text-[12px] font-medium text-[#666783]">
-                <LocationIcon location={location} />
-                {LOCATION_LABELS[location]}
-              </p>
-              <p className="mt-0.5 flex items-center gap-1.5 text-[12px] font-medium text-[#666783]">
-                <Clock size={12} aria-hidden="true" />
-                Total: {formatMinutes(day.workMinutes)}
-              </p>
-              {hierarchy && hierarchy.tasks.length > 0 ? (
-                <span className="mt-1.5 inline-flex">
-                  <VerificationBadge verification={hierarchy.verification} />
-                </span>
-              ) : null}
             </div>
           </section>
 
@@ -231,59 +347,66 @@ export function EmployeeDetailMobile({
             </button>
           </div>
 
-          {/* Tabs */}
-          <div
-            role="tablist"
-            aria-label="Employee detail sections"
-            className="mt-4 grid grid-cols-5 gap-1 rounded-2xl bg-[#ECEAF6] p-1"
-          >
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
-                className={`min-h-10 rounded-xl px-0.5 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] sm:text-xs ${
-                  tab === t.id ? "bg-[#6040E8] text-white shadow-sm" : "text-[#666783] hover:text-[#17172B]"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          {/* Summary metrics — same four as the desktop report */}
+          <section aria-label="Daily summary" className="mt-4 grid grid-cols-2 gap-2.5">
+            <MetricCard
+              icon={<Clock size={18} className="text-[#6040E8]" aria-hidden="true" />}
+              iconClass="bg-[#EFEAFF]"
+              value={formatMinutes(day.workMinutes)}
+              label="Total Work Time"
+            />
+            <MetricCard
+              icon={<Coffee size={18} className="text-[#E99A16]" aria-hidden="true" />}
+              iconClass="bg-[#FFF5E5]"
+              value={formatMinutes(day.breakMinutes)}
+              label="Break Time"
+            />
+            <MetricCard
+              icon={<Zap size={18} className="text-[#B45309]" aria-hidden="true" />}
+              iconClass="bg-[#FFF5E5]"
+              value={formatMinutes(day.overtimeMinutes)}
+              label="Overtime"
+            />
+            <MetricCard
+              icon={<FileText size={18} className="text-[#3478D4]" aria-hidden="true" />}
+              iconClass="bg-[#E8F0FB]"
+              value={String(day.entries.length)}
+              label="Work Entries"
+            />
+          </section>
 
-          <div className="mt-5">
-            {tab === "overview" ? (
-              <OverviewTab
-                day={day}
-                viewDate={viewDate}
-                tasksRecorded={tasksRecorded}
-                completedTasks={completedTasks}
-                taskMinutesOnDay={taskMinutesOnDay}
-                onViewHistory={showWorkHistory}
-              />
-            ) : tab === "tasks" ? (
-              <TasksTab hierarchy={hierarchy} />
-            ) : tab === "history" ? (
-              <HistoryTab
-                timeline={timeline}
-                db={db}
-                filter={historyFilter}
-                emptyMessage={emptyMessage}
-                onOpenFilter={() => setFilterSheetOpen(true)}
-                onResetFilter={() => setHistoryFilter("all")}
-                viewDate={viewDate}
-                onExport={exportDay}
-                exporting={exporting}
-                exportError={exportError}
-              />
-            ) : tab === "breaks" ? (
-              <BreaksTab day={day} />
+          {/* Activity feed — same information as the desktop report */}
+          <div className="mt-4 space-y-2">
+            {blocks.length === 0 ? (
+              <p className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-10 text-center text-[13px] text-[#666783]">
+                No work entries recorded for this date.
+              </p>
             ) : (
-              <OvertimeTab day={day} overtimeEntries={overtimeEntries} db={db} />
+              blocks.map((block) =>
+                block.kind === "break" ? (
+                  <ActivityBreakCard key={`break-${block.brk.id}`} brk={block.brk} />
+                ) : (
+                  <ActivityTaskCard
+                    key={block.item.task.id}
+                    item={block.item}
+                    open={openTasks.has(block.item.task.id)}
+                    onToggle={() => toggleTask(block.item.task.id)}
+                  />
+                )
+              )
             )}
           </div>
+
+          {exportError ? <p role="alert" className="mt-3 text-xs text-[#B43A3A]">{exportError}</p> : null}
+          <button
+            type="button"
+            onClick={exportDay}
+            disabled={exporting}
+            className="mt-5 flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-[#6040E8] text-sm font-bold text-white shadow-sm transition hover:bg-[#4F31D0] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] focus-visible:ring-offset-2"
+          >
+            <Download size={16} aria-hidden="true" />
+            {exporting ? "Preparing…" : "Export This Day"}
+          </button>
         </div>
       </div>
 
@@ -298,361 +421,6 @@ export function EmployeeDetailMobile({
           setDateSheetOpen(false);
         }}
       />
-
-      {/* History filter sheet */}
-      <BottomSheet open={filterSheetOpen} onClose={() => setFilterSheetOpen(false)} title="Filter records">
-        <div className="flex flex-col gap-1">
-          {HISTORY_FILTERS.map((f) => (
-            <SheetOption
-              key={f.id}
-              label={f.label}
-              selected={historyFilter === f.id}
-              onClick={() => {
-                setHistoryFilter(f.id);
-                setFilterSheetOpen(false);
-              }}
-            />
-          ))}
-        </div>
-      </BottomSheet>
-    </div>
-  );
-}
-
-function TasksTab({ hierarchy }: { hierarchy: EmployeeHierarchy | null }) {
-  if (!hierarchy) {
-    return (
-      <p className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-6 text-center text-[13px] text-[#666783]">
-        This employee could not be found.
-      </p>
-    );
-  }
-  return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-[15px] font-bold text-[#17172B]">Tasks with timed work</h3>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-medium text-[#9292A8]">
-            {hierarchy.tasks.length} {hierarchy.tasks.length === 1 ? "task" : "tasks"} ·{" "}
-            {hierarchy.day.entries.length} entries
-          </span>
-          {hierarchy.tasks.length > 0 ? <VerificationBadge verification={hierarchy.verification} /> : null}
-        </div>
-      </div>
-      <TaskGroupList items={hierarchy.tasks} emptyMessage="No timed tasks for this date." />
-      <LegacyTaskList tasks={hierarchy.legacyTasks} className="mt-5" />
-    </div>
-  );
-}
-
-function OverviewTab({
-  day,
-  viewDate,
-  tasksRecorded,
-  completedTasks,
-  taskMinutesOnDay,
-  onViewHistory,
-}: {
-  day: DaySummary;
-  viewDate: string;
-  tasksRecorded: number;
-  completedTasks: Task[];
-  taskMinutesOnDay: (taskId: string) => number;
-  onViewHistory: () => void;
-}) {
-  return (
-    <div>
-      <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-[15px] font-bold text-[#17172B]">Daily Summary</h3>
-        <span className="text-[11px] font-medium text-[#9292A8]">{formatDateLabel(viewDate)}</span>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2.5">
-        <MetricCard
-          icon={<ClipboardCheck size={18} className="text-[#159947]" aria-hidden="true" />}
-          iconClass="bg-[#EAF8EF]"
-          value={String(tasksRecorded)}
-          label="Tasks Recorded"
-        />
-        <MetricCard
-          icon={<CheckCircle2 size={18} className="text-[#6040E8]" aria-hidden="true" />}
-          iconClass="bg-[#EFEAFF]"
-          value={formatMinutes(day.workMinutes)}
-          label="Work Time"
-        />
-        <MetricCard
-          icon={<Coffee size={18} className="text-[#E99A16]" aria-hidden="true" />}
-          iconClass="bg-[#FFF5E5]"
-          value={formatMinutes(day.breakMinutes)}
-          label="Break Time"
-        />
-        <MetricCard
-          icon={<Clock size={18} className="text-[#B45309]" aria-hidden="true" />}
-          iconClass="bg-[#FFF5E5]"
-          value={formatMinutes(day.overtimeMinutes)}
-          label="Overtime"
-        />
-      </div>
-
-      <section className="mt-6">
-        <h3 className="text-[15px] font-bold text-[#17172B]">
-          Tasks Completed ({completedTasks.length})
-        </h3>
-        {completedTasks.length === 0 ? (
-          <p className="mt-3 rounded-2xl border border-[#EAE8F2] bg-white px-4 py-5 text-center text-[13px] text-[#666783]">
-            No tasks completed on this date.
-          </p>
-        ) : (
-          <ol className="mt-3">
-            {completedTasks.map((task) => {
-              const minutes = taskMinutesOnDay(task.id);
-              return (
-                <li key={task.id} className="relative flex gap-3 pb-4 pl-1 last:pb-0">
-                  <span className="relative flex flex-col items-center">
-                    <span className="z-10 mt-1 h-3 w-3 shrink-0 rounded-full border-2 border-white bg-[#6040E8] shadow" aria-hidden="true" />
-                    <span className="absolute top-4 h-full w-px bg-[#EAE8F2]" aria-hidden="true" />
-                  </span>
-                  <div className="min-w-0 flex-1 rounded-2xl border border-[#EAE8F2] bg-white px-3.5 py-3">
-                    <p className="break-words text-[13px] font-semibold leading-5 text-[#17172B]">{task.title}</p>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                      {minutes > 0 ? (
-                        <span className="text-[11px] font-medium text-[#9292A8]">{formatMinutes(minutes)} recorded</span>
-                      ) : null}
-                      <span className="rounded-full bg-[#EAF8EF] px-2 py-0.5 text-[10px] font-bold text-[#159947]">
-                        Completed
-                      </span>
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
-
-      <button
-        type="button"
-        onClick={onViewHistory}
-        className="mt-6 flex min-h-[54px] w-full items-center justify-center gap-2 rounded-2xl bg-[#6040E8] text-sm font-bold text-white shadow-sm transition hover:bg-[#4F31D0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8] focus-visible:ring-offset-2"
-      >
-        <ListOrdered size={16} aria-hidden="true" />
-        View Full Work History
-      </button>
-    </div>
-  );
-}
-
-function HistoryTab({
-  timeline,
-  db,
-  filter,
-  emptyMessage,
-  onOpenFilter,
-  onResetFilter,
-  viewDate,
-  onExport,
-  exporting,
-  exportError,
-}: {
-  timeline: TimelineItem[];
-  db: WorkLogDatabase;
-  filter: HistoryFilter;
-  emptyMessage: string;
-  onOpenFilter: () => void;
-  onResetFilter: () => void;
-  viewDate: string;
-  onExport: () => void;
-  exporting: boolean;
-  exportError: string | null;
-}) {
-  const filterLabel = HISTORY_FILTERS.find((f) => f.id === filter)?.label ?? "All Records";
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onOpenFilter}
-        className="flex min-h-11 w-full items-center justify-between rounded-2xl border border-[#EAE8F2] bg-white px-4 text-sm font-semibold text-[#17172B] transition hover:border-[#D8D4F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8]"
-      >
-        {filterLabel}
-        <ChevronDown size={16} className="text-[#9292A8]" aria-hidden="true" />
-      </button>
-
-      <div className="mb-2 mt-4 flex items-baseline justify-between">
-        <h3 className="text-[15px] font-bold text-[#17172B]">Daily Work Log</h3>
-        <span className="text-[11px] font-medium text-[#9292A8]">{formatDateLabel(viewDate)}</span>
-      </div>
-
-      {timeline.length === 0 ? (
-        <div className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-6 text-center">
-          <p className="text-[13px] text-[#666783]">{emptyMessage}</p>
-          {filter !== "all" ? (
-            <button
-              type="button"
-              onClick={onResetFilter}
-              className="mt-3 min-h-10 rounded-full bg-[#EFEAFF] px-4 text-[12px] font-bold text-[#4F31D0] transition hover:bg-[#E4DEFB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8]"
-            >
-              Show all records
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <ol className="divide-y divide-[#ECEAF6] rounded-2xl border border-[#EAE8F2] bg-white">
-          {timeline.map((item) =>
-            item.kind === "entry" ? (
-              <WorkRow key={item.entry.id} db={db} entry={item.entry} />
-            ) : (
-              <BreakRow key={item.brk.id} brk={item.brk} />
-            )
-          )}
-        </ol>
-      )}
-
-      {exportError ? <p role="alert" className="mt-3 text-xs text-[#B43A3A]">{exportError}</p> : null}
-      <button
-        type="button"
-        onClick={onExport}
-        disabled={exporting}
-        className="mt-5 flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl border border-[#DCD6F5] bg-[#F3F0FE] text-sm font-bold text-[#4F31D0] transition hover:bg-[#ECE7FD] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6040E8]"
-      >
-        <Download size={16} aria-hidden="true" />
-        {exporting ? "Preparing…" : "Export Daily Report (Excel)"}
-      </button>
-    </div>
-  );
-}
-
-function WorkRow({ db, entry }: { db: WorkLogDatabase; entry: WorkEntry }) {
-  const isOvertime = entry.overtimeMinutes > 0;
-  const task = getTaskById(db, entry.taskId);
-  const verification = task ? verificationOf(task) : null;
-  return (
-    <li className="flex items-center gap-3 px-4 py-3">
-      <span
-        className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${
-          isOvertime ? "bg-[#FFF5E5]" : "bg-[#EAF8EF]"
-        }`}
-      >
-        {isOvertime ? (
-          <Clock size={17} className="text-[#E99A16]" aria-hidden="true" />
-        ) : (
-          <CheckCircle2 size={17} className="text-[#159947]" aria-hidden="true" />
-        )}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-semibold text-[#17172B]">
-          {isOvertime ? "Overtime · " : ""}
-          {task?.title ?? "Task"}
-        </p>
-        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-[#9292A8]">
-          <span className="truncate">
-            {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
-            {isOvertime ? ` · ${formatMinutes(entry.overtimeMinutes)} OT` : ""}
-            {entry.isReportedOvertime ? " · Reported" : ""}
-          </span>
-          <StatusBadge status={task?.currentStatus ?? "ongoing"} className="shrink-0" />
-          {verification && verification.level !== "verified" ? (
-            <VerificationBadge verification={verification} className="shrink-0" />
-          ) : null}
-        </p>
-      </div>
-      <span className="shrink-0 text-[12px] font-bold text-[#17172B]">
-        {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
-      </span>
-    </li>
-  );
-}
-
-function BreakRow({ brk }: { brk: BreakEntry }) {
-  return (
-    <li className="flex items-center gap-3 bg-[#FFF9ED]/60 px-4 py-3">
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#FFF5E5]">
-        <Coffee size={17} className="text-[#E99A16]" aria-hidden="true" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold text-[#17172B]">Break</p>
-        <p className="mt-0.5 text-[11px] text-[#9292A8]">{timeRange(brk.startAt, brk.endAt)}</p>
-      </div>
-      <span className="shrink-0 text-[12px] font-bold text-[#17172B]">
-        {brk.endAt ? formatMinutes(durationMinutes(brk.startAt, brk.endAt)) : "—"}
-      </span>
-    </li>
-  );
-}
-
-function BreaksTab({ day }: { day: DaySummary }) {
-  return (
-    <div>
-      <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-[15px] font-bold text-[#17172B]">Breaks</h3>
-        <span className="rounded-full bg-[#FFF5E5] px-2.5 py-1 text-[11px] font-bold text-[#B45309]">
-          Total {formatMinutes(day.breakMinutes)}
-        </span>
-      </div>
-      {day.breaks.length === 0 ? (
-        <p className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-6 text-center text-[13px] text-[#666783]">
-          No break records.
-        </p>
-      ) : (
-        <ol className="divide-y divide-[#ECEAF6] rounded-2xl border border-[#EAE8F2] bg-white">
-          {day.breaks.map((brk) => (
-            <BreakRow key={brk.id} brk={brk} />
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
-function OvertimeTab({
-  day,
-  overtimeEntries,
-  db,
-}: {
-  day: DaySummary;
-  overtimeEntries: WorkEntry[];
-  db: WorkLogDatabase;
-}) {
-  return (
-    <div>
-      <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-[15px] font-bold text-[#17172B]">Overtime</h3>
-        <span className="rounded-full bg-[#FFF5E5] px-2.5 py-1 text-[11px] font-bold text-[#B45309]">
-          Total {formatMinutes(day.overtimeMinutes)}
-        </span>
-      </div>
-      {overtimeEntries.length === 0 ? (
-        <p className="rounded-2xl border border-[#EAE8F2] bg-white px-4 py-6 text-center text-[13px] text-[#666783]">
-          No overtime recorded.
-        </p>
-      ) : (
-        <ol className="divide-y divide-[#ECEAF6] rounded-2xl border border-[#EAE8F2] bg-white">
-          {overtimeEntries.map((entry) => {
-            const task = getTaskById(db, entry.taskId);
-            return (
-              <li key={entry.id} className="flex items-center gap-3 px-4 py-3">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#FFF5E5]">
-                  <Clock size={17} className="text-[#E99A16]" aria-hidden="true" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-semibold text-[#17172B]">
-                    Overtime · {task?.title ?? "Task"}
-                  </p>
-                  <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-[#9292A8]">
-                    <span className="truncate">
-                      {timeRange(entry.startAt, entry.endAt)} · {WORK_LOCATION_LABELS[entry.workLocation]}
-                      {entry.isReportedOvertime ? " · Reported" : ""}
-                    </span>
-                    <StatusBadge status={task?.currentStatus ?? "ongoing"} className="shrink-0" />
-                  </p>
-                </div>
-                <span className="shrink-0 text-[12px] font-bold text-[#B45309]">
-                  {formatMinutes(entry.overtimeMinutes)}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      )}
     </div>
   );
 }
