@@ -3,7 +3,6 @@
 import {
   Building2,
   CalendarDays,
-  Check,
   Coffee,
   House,
   ListChecks,
@@ -96,6 +95,50 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     employee,
     lockAutoSlot,
   } = c;
+
+  const CUSTOM_TIME = "__custom_time";
+  const timeOptions = [
+    ...slots.map((slot) => ({
+      value: slot.key,
+      label: slot.label,
+      description: !slot.available
+        ? "Already recorded"
+        : slot.current
+          ? "Current hour"
+          : nextAvailableSlot?.key === slot.key
+            ? "Next available"
+            : undefined,
+      disabled: !slot.available || Boolean(activeBreak),
+    })),
+    { value: CUSTOM_TIME, label: "Custom time", description: "Set start and end manually" },
+  ];
+  const timeValue = selectedSlot || (showTimeAdjustment ? CUSTOM_TIME : "");
+  const selectedSlotLabel = slots.find((slot) => slot.key === selectedSlot)?.label;
+
+  const handleTimeChange = (value: string) => {
+    if (value === CUSTOM_TIME) {
+      setSelectedSlot("");
+      setShowTimeAdjustment(true);
+      lockAutoSlot();
+      return;
+    }
+    const slot = slots.find((candidate) => candidate.key === value);
+    if (slot) selectSlot(slot);
+  };
+
+  const timeSelectField = (
+    <div className="min-w-0">
+      <span className="mb-1 block text-xs font-semibold text-[#53506B]">Time</span>
+      <WorkTrackSelect
+        label="Work time"
+        value={timeValue}
+        onChange={handleTimeChange}
+        options={timeOptions}
+        placeholder="Select time"
+        disabled={Boolean(activeBreak)}
+      />
+    </div>
+  );
 
   return (
     <div className="hidden min-h-dvh bg-[#F7F7FC] px-6 py-3 text-[#17172F] lg:block">
@@ -302,19 +345,23 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                         ]}
                       />
                     ) : null}
+                    {timeSelectField}
                   </div>
                 ) : (
                   <div className="mt-3 space-y-3">
-                    <label className="block text-xs font-semibold text-[#53506B]">
-                      Task title
-                      <input
-                        value={newTaskTitle}
-                        maxLength={WORKLOG_RULES.taskTitleMaxLength}
-                        onChange={(event) => setNewTaskTitle(event.target.value)}
-                        placeholder="Give this task a clear name"
-                        className={INPUT_CLASS}
-                      />
-                    </label>
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)] sm:items-end">
+                      <label className="block text-xs font-semibold text-[#53506B]">
+                        Task title
+                        <input
+                          value={newTaskTitle}
+                          maxLength={WORKLOG_RULES.taskTitleMaxLength}
+                          onChange={(event) => setNewTaskTitle(event.target.value)}
+                          placeholder="Give this task a clear name"
+                          className={INPUT_CLASS}
+                        />
+                      </label>
+                      {timeSelectField}
+                    </div>
                     <section aria-labelledby="new-subtasks-heading" className="rounded-lg border border-[#EEEAF2] bg-white p-3">
                       <h3 id="new-subtasks-heading" className="text-xs font-semibold text-[#39364F]">
                         Subtasks
@@ -392,46 +439,15 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                         {showTimeAdjustment ? "Hide custom time" : "Set custom time"}
                       </button>
                     </div>
-                    {slots.length ? (
-                      <div className="mt-1.5 grid grid-cols-4 gap-2">
-                        {slots.map((slot) => {
-                          const selected = selectedSlot === slot.key;
-                          const isNext = !selected && nextAvailableSlot?.key === slot.key;
-                          return (
-                            <button
-                              key={slot.key}
-                              type="button"
-                              disabled={!slot.available || Boolean(activeBreak)}
-                              onClick={() => selectSlot(slot)}
-                              aria-pressed={selected}
-                              title={!slot.available ? "This time is already logged or covered by a break" : undefined}
-                              className={`relative flex min-h-9 min-w-0 items-center justify-center whitespace-nowrap rounded-lg border px-2 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-not-allowed disabled:opacity-55 ${
-                                selected
-                                  ? "border-[#6C45F5] bg-[#F5F1FF] text-[#4E35C6]"
-                                  : isNext
-                                    ? "border-[#B8A8F8] bg-[#F5F1FF] text-[#4E35C6]"
-                                    : slot.available
-                                      ? "border-[#E7E6F0] bg-white text-[#39364F] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
-                                      : "border-[#E7E6F0] bg-[#F1F1F5] text-[#8B8B9A]"
-                              }`}
-                            >
-                              {selected ? <Check size={12} aria-hidden="true" className="mr-1 shrink-0" /> : null}
-                              <span className="truncate">{slot.label}</span>
-                              {slot.current && slot.available ? (
-                                <span className="sr-only">Current hour</span>
-                              ) : isNext ? (
-                                <span className="sr-only">Next available</span>
-                              ) : null}
-                              {!slot.available ? <span className="ml-1 shrink-0 text-[9px] font-medium">Recorded</span> : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="mt-1.5 rounded-lg bg-[#F7F7FC] px-2.5 py-2 text-xs text-[#777A91]">
-                        No standard work slots today. Use the time adjustment to record weekend overtime.
-                      </p>
-                    )}
+                    <p className="mt-1.5 text-xs leading-5 text-[#777A91]">
+                      {showTimeAdjustment
+                        ? "Custom time — set the start and end below."
+                        : selectedSlotLabel
+                          ? `Selected ${selectedSlotLabel}.`
+                          : slots.length
+                            ? "Choose a time beside the task title."
+                            : "No standard work slots today. Use custom time for overtime."}
+                    </p>
                     {showTimeAdjustment ? (
                       <div className="mt-2 grid gap-2 rounded-xl border border-[#EEEAF8] bg-white p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
                         <label className="block text-[12px] font-semibold text-[#53506B] sm:text-[13px]">

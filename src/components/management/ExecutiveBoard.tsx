@@ -395,7 +395,6 @@ function ExecutiveDesktopBoard() {
                 <th className="w-[100px] whitespace-nowrap px-4 py-3 text-right">Work time</th>
                 <th className="w-[80px] whitespace-nowrap px-4 py-3 text-right">Entries</th>
                 <th className="w-[80px] whitespace-nowrap px-4 py-3 text-right">Tasks</th>
-                <th className="w-[120px] whitespace-nowrap px-4 py-3">Verification</th>
                 <th className="w-[210px] whitespace-nowrap px-4 py-3">Status</th>
               </tr>
             </thead>
@@ -438,13 +437,6 @@ function ExecutiveDesktopBoard() {
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">{day.entries.length}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">{taskCount}</td>
                   <td className="px-4 py-3">
-                    {taskCount > 0 && hierarchy ? (
-                      <VerificationBadge verification={hierarchy.verification} />
-                    ) : (
-                      <span className="text-[11px] text-[#A6A3BC]">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
                     <StatusBadges status={status} hasBreak={day.breaks.length > 0} hasOvertime={day.overtimeMinutes > 0} />
                   </td>
                 </tr>
@@ -452,7 +444,7 @@ function ExecutiveDesktopBoard() {
               })}
               {visibleEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-[#777A91]">
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-[#777A91]">
                     No employees match this search.
                   </td>
                 </tr>
