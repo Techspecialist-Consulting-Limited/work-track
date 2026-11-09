@@ -390,13 +390,13 @@ function ExecutiveDesktopBoard() {
           <table className="w-full table-fixed text-left text-sm">
             <thead>
               <tr className="border-b border-[#EEEAF2] bg-[#FCFBFF] text-[11px] font-semibold uppercase tracking-wide text-[#8B8B9A]">
-                <th className="px-4 py-3">Employee</th>
-                <th className="w-[120px] px-4 py-3">Role</th>
-                <th className="w-[90px] px-4 py-3 text-right">Work time</th>
-                <th className="w-[70px] px-4 py-3 text-right">Entries</th>
-                <th className="w-[70px] px-4 py-3 text-right">Tasks</th>
-                <th className="w-[140px] px-4 py-3">Verification</th>
-                <th className="w-[170px] px-4 py-3">Status</th>
+                <th className="whitespace-nowrap px-4 py-3">Employee</th>
+                <th className="w-[120px] whitespace-nowrap px-4 py-3">Role</th>
+                <th className="w-[100px] whitespace-nowrap px-4 py-3 text-right">Work time</th>
+                <th className="w-[80px] whitespace-nowrap px-4 py-3 text-right">Entries</th>
+                <th className="w-[80px] whitespace-nowrap px-4 py-3 text-right">Tasks</th>
+                <th className="w-[120px] whitespace-nowrap px-4 py-3">Verification</th>
+                <th className="w-[210px] whitespace-nowrap px-4 py-3">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -429,12 +429,14 @@ function ExecutiveDesktopBoard() {
                       </span>
                     </div>
                   </td>
-                  <td className="break-words px-4 py-3 text-[#53506B]">{employee.role}</td>
+                  <td className="truncate px-4 py-3 text-[#53506B]" title={employee.role}>
+                    {employee.role}
+                  </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">
                     {formatMinutes(day.workMinutes)}
                   </td>
-                  <td className="px-4 py-3 text-right font-semibold text-[#17172F]">{day.entries.length}</td>
-                  <td className="px-4 py-3 text-right font-semibold text-[#17172F]">{taskCount}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">{day.entries.length}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">{taskCount}</td>
                   <td className="px-4 py-3">
                     {taskCount > 0 && hierarchy ? (
                       <VerificationBadge verification={hierarchy.verification} />
@@ -533,7 +535,7 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
 
 function StatusBadges({ status, hasBreak, hasOvertime }: { status: EmployeeDay["status"]; hasBreak: boolean; hasOvertime: boolean }) {
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
       {status === "on_break" ? (
         <span className="inline-flex items-center gap-1 rounded-full bg-[#FFF3D6] px-2 py-0.5 text-[10px] font-semibold text-[#9A6200]">
           <Coffee size={10} aria-hidden="true" /> On break
@@ -899,16 +901,16 @@ function EmployeeDrawer({
 }) {
   const [viewDate, setViewDate] = useState(dateKey);
   const [syncedKey, setSyncedKey] = useState(`${employee.id}:${dateKey}`);
-  const [closedTasks, setClosedTasks] = useState<ReadonlySet<string>>(() => new Set());
+  const [openTasks, setOpenTasks] = useState<ReadonlySet<string>>(() => new Set());
   const syncKey = `${employee.id}:${dateKey}`;
   if (syncKey !== syncedKey) {
     setSyncedKey(syncKey);
     setViewDate(dateKey);
-    setClosedTasks(new Set());
+    setOpenTasks(new Set());
   }
 
   const toggleTask = (taskId: string) => {
-    setClosedTasks((prev) => {
+    setOpenTasks((prev) => {
       const next = new Set(prev);
       if (next.has(taskId)) next.delete(taskId);
       else next.add(taskId);
@@ -1073,7 +1075,7 @@ function EmployeeDrawer({
                       <ActivityTaskRows
                         key={block.item.task.id}
                         item={block.item}
-                        open={!closedTasks.has(block.item.task.id)}
+                        open={openTasks.has(block.item.task.id)}
                         onToggle={() => toggleTask(block.item.task.id)}
                       />
                     )
