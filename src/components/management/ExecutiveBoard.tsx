@@ -386,17 +386,17 @@ function ExecutiveDesktopBoard() {
         ) : (
           <>
         {/* Desktop table */}
-        <div className="hidden overflow-hidden rounded-2xl border border-[#E7E6F0] bg-white shadow-sm md:block">
-          <table className="w-full text-left text-sm">
+        <div className="hidden overflow-x-auto rounded-2xl border border-[#E7E6F0] bg-white shadow-sm md:block">
+          <table className="w-full table-fixed text-left text-sm">
             <thead>
               <tr className="border-b border-[#EEEAF2] bg-[#FCFBFF] text-[11px] font-semibold uppercase tracking-wide text-[#8B8B9A]">
                 <th className="px-4 py-3">Employee</th>
-                <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3 text-right">Work time</th>
-                <th className="px-4 py-3 text-right">Entries</th>
-                <th className="px-4 py-3 text-right">Tasks</th>
-                <th className="px-4 py-3">Verification</th>
-                <th className="px-4 py-3">Status</th>
+                <th className="w-[120px] px-4 py-3">Role</th>
+                <th className="w-[90px] px-4 py-3 text-right">Work time</th>
+                <th className="w-[70px] px-4 py-3 text-right">Entries</th>
+                <th className="w-[70px] px-4 py-3 text-right">Tasks</th>
+                <th className="w-[140px] px-4 py-3">Verification</th>
+                <th className="w-[170px] px-4 py-3">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -419,7 +419,7 @@ function ExecutiveDesktopBoard() {
                   className="cursor-pointer border-b border-[#F1F0F6] transition last:border-0 hover:bg-[#FCFBFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#6C45F5]"
                 >
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex min-w-0 items-center gap-2.5">
                       <Avatar name={employee.name} avatarUrl={employee.avatarUrl} size={32} />
                       <span className="min-w-0">
                         <span className="block truncate font-semibold text-[#17172F]">{employee.name}</span>
@@ -429,7 +429,7 @@ function ExecutiveDesktopBoard() {
                       </span>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-[#53506B]">{employee.role}</td>
+                  <td className="break-words px-4 py-3 text-[#53506B]">{employee.role}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-[#17172F]">
                     {formatMinutes(day.workMinutes)}
                   </td>
