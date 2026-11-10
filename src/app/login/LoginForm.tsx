@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Briefcase, ChevronRight, Landmark, ShieldCheck, Users } from "lucide-react";
+import { Briefcase, ChevronRight, Landmark, Users, Zap } from "lucide-react";
 import { chooseRole } from "./actions";
 import type { WorkTrackRole } from "@/lib/auth/authorize";
 
@@ -34,8 +34,8 @@ export function LoginForm() {
   return (
     <div className="w-full max-w-md">
       <div className="mb-8 text-center">
-        <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-[#159947] text-white">
-          <ShieldCheck size={22} strokeWidth={2.2} aria-hidden="true" />
+        <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-[#6C45F5] text-white">
+          <Zap size={22} strokeWidth={2.2} fill="currentColor" aria-hidden="true" />
         </span>
         <h1 className="text-2xl font-bold tracking-tight text-[#17172B]">Welcome to WorkTrack</h1>
         <p className="mt-1 text-sm text-[#666783]">Choose how you access WorkTrack.</p>

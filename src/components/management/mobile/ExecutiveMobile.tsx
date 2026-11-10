@@ -189,7 +189,7 @@ export function ExecutiveMobile() {
           style={{ minHeight: "calc(56px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}
         >
           <div className="flex items-center gap-2">
-            <span className="grid h-8 w-8 place-items-center rounded-xl bg-[#159947] text-white">
+            <span className="grid h-8 w-8 place-items-center rounded-xl bg-[#6C45F5] text-white">
               <Zap size={15} strokeWidth={2.4} fill="currentColor" aria-hidden="true" />
             </span>
             <span className="leading-tight">
