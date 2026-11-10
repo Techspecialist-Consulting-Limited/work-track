@@ -16,6 +16,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { WorkTrackSelect } from "@/components/WorkTrackSelect";
 import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
@@ -28,7 +29,8 @@ import {
   SCHEDULED_MINUTES,
 } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
-import type { WorkSlot } from "./shared";
+
+const CUSTOM_TIME_SLOT = "__custom_time";
 
 const LOCATION_ICONS = {
   office: Building2,
@@ -92,9 +94,14 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
     setSheetQuery("");
   }
 
-  function pickSlot(slot: WorkSlot) {
-    c.selectSlot(slot);
-    setAdjustSheetOpen(false);
+  function handleTimeSelect(value: string) {
+    if (value === CUSTOM_TIME_SLOT) {
+      openAdjustSheet();
+      return;
+    }
+    if (!value) return;
+    const slot = c.slots.find((candidate) => candidate.key === value);
+    if (slot) c.selectSlot(slot);
   }
 
   function openAdjustSheet() {
@@ -401,46 +408,40 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                 </button>
               </div>
 
-              {c.slots.length ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {c.slots.map((slot) => {
-                    const selected = c.selectedSlot === slot.key;
-                    const isNext = c.nextAvailableSlot?.key === slot.key;
-                    return (
-                      <button
-                        key={slot.key}
-                        type="button"
-                        disabled={!slot.available}
-                        onClick={() => pickSlot(slot)}
-                        aria-pressed={selected}
-                        className={`flex min-h-12 min-w-0 items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:cursor-not-allowed disabled:opacity-55 ${
-                          selected
-                            ? "border-[#6C45F5] bg-[#F5F1FF] text-[#4E35C6]"
-                            : slot.available
-                              ? isNext
-                                ? "border-[#B8A8F8] bg-[#F5F1FF]/60 text-[#39364F] hover:bg-[#F5F1FF]"
-                                : "border-[#E7E6F0] bg-white text-[#39364F] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
-                              : "border-[#E7E6F0] bg-[#F1F1F5] text-[#8B8B9A]"
-                        }`}
-                      >
-                        {selected ? <Check size={14} aria-hidden="true" className="shrink-0" /> : null}
-                        <span className="truncate">{slot.label}</span>
-                        {!slot.available ? <span className="shrink-0 text-[9px] font-medium">Recorded</span> : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="rounded-xl border border-[#EEEAF8] bg-white p-3.5">
-                  <p className="text-xs leading-5 text-[#777A91]">
-                    No standard hourly slots today. Use{" "}
-                    <button type="button" onClick={openAdjustSheet} className="font-semibold text-[#6C45F5] underline">
-                      adjust time / overtime
-                    </button>{" "}
-                    to log work outside 9:00–17:00 or on a weekend.
-                  </p>
-                </div>
-              )}
+              <div className="text-[11px] font-semibold text-[#53506B]">
+                <span className="mb-1 block">Time slot</span>
+                <WorkTrackSelect
+                  label="Time slot"
+                  value={c.selectedSlot || (c.showTimeAdjustment ? CUSTOM_TIME_SLOT : "")}
+                  onChange={handleTimeSelect}
+                  options={[
+                    ...c.slots.map((slot) => ({
+                      value: slot.key,
+                      label: slot.label,
+                      description: !slot.available
+                        ? "Already recorded"
+                        : slot.current
+                          ? "Current hour"
+                          : c.nextAvailableSlot?.key === slot.key
+                            ? "Next available"
+                            : undefined,
+                      disabled: !slot.available,
+                    })),
+                    {
+                      value: CUSTOM_TIME_SLOT,
+                      label: "Custom time / overtime",
+                      description: "Set start and end manually",
+                    },
+                  ]}
+                  placeholder="Select a time…"
+                  disabled={Boolean(c.activeBreak)}
+                />
+              </div>
+              {!c.slots.length ? (
+                <p className="mt-2 text-[11px] leading-5 text-[#8B8B9A]">
+                  No standard hourly slots today — choose Custom time to log work outside 9:00–17:00 or on a weekend.
+                </p>
+              ) : null}
 
               {c.showTimeAdjustment && !c.selectedSlot ? (
                 <p className="mt-2 rounded-lg bg-[#F1F0F6] px-3 py-2 text-[11px] font-medium text-[#6B6880]">
