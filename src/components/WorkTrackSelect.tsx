@@ -30,7 +30,7 @@ interface MenuPosition {
   width: number;
   maxHeight: number;
 }
-
+// testing values
 const MENU_GAP = 6;
 const VIEWPORT_PADDING = 8;
 const MENU_MAX_HEIGHT = 280;
