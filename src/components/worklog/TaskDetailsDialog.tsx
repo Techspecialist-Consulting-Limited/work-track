@@ -490,7 +490,7 @@ function TaskPanel({
                   className={INPUT_CLASS}
                 >
                   <option value="">No category</option>
-                  {c.categories.map((category) => (
+                  {c.db.categories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.name}
                     </option>

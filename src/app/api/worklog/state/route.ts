@@ -13,7 +13,10 @@ export async function GET(request: Request) {
     const isManagement = membership.role === "hr" || membership.role === "chairman";
 
     let db;
-    if (scope === "team") {
+    if (scope === "config") {
+      if (!membership.isConfigAdmin) throw new AuthzError(403, "Configuration admin access required.");
+      db = await loadWorkLogDb();
+    } else if (scope === "team") {
       if (!isManagement) throw new AuthzError(403, "Management access required.");
       db = await loadWorkLogDb();
     } else {
@@ -29,6 +32,8 @@ export async function GET(request: Request) {
       db,
       employeeId: membership.employeeId,
       role: membership.role,
+      isConfigAdmin: membership.isConfigAdmin,
+      activeTeamId: membership.activeTeamId,
       user: { name: membership.user.name ?? null, email: membership.user.email ?? null },
     });
   } catch (e) {

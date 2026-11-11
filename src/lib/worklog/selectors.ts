@@ -2,7 +2,17 @@ import { WORKTRACK_SCHEDULE, getZonedDateKey, zonedDateTimeToDate } from "@/lib/
 import { WORKLOG_RULES } from "./config";
 import { dateKeyOf, durationMinutes } from "./time";
 import { breakDeadline } from "./validation";
-import type { BreakEntry, Employee, EmployeeId, Task, WorkEntry, WorkLocation, WorkLogDatabase } from "./types";
+import type {
+  BreakEntry,
+  Employee,
+  EmployeeId,
+  Task,
+  Team,
+  TeamProject,
+  WorkEntry,
+  WorkLocation,
+  WorkLogDatabase,
+} from "./types";
 
 export const SHIFT_MINUTES =
   (WORKLOG_RULES.workEndHour - WORKLOG_RULES.workStartHour) * 60;
@@ -152,10 +162,43 @@ export function getEmployee(db: WorkLogDatabase, employeeId: EmployeeId): Employ
   return db.employees.find((e) => e.id === employeeId);
 }
 
+/** Teams the employee is explicitly assigned to, active first. */
+export function getTeamsForEmployee(db: WorkLogDatabase, employeeId: EmployeeId): Team[] {
+  const ids = new Set(db.employeeTeams.filter((row) => row.employeeId === employeeId).map((row) => row.teamId));
+  return db.teams
+    .filter((team) => ids.has(team.id) && team.isActive)
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name));
+}
+
+export function getProjectsForTeam(
+  db: WorkLogDatabase,
+  teamId: string,
+  options: { includeArchived?: boolean } = {}
+): TeamProject[] {
+  return db.projects
+    .filter(
+      (project) =>
+        project.teamId === teamId &&
+        (options.includeArchived || (!project.archivedAt && project.isActive))
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function getProjectById(db: WorkLogDatabase, projectId: string): TeamProject | undefined {
+  return db.projects.find((project) => project.id === projectId);
+}
+
+/** Project name for a task, falling back to the task title for legacy tasks. */
+export function getTaskProjectName(db: WorkLogDatabase, task: Task): string {
+  if (!task.projectId) return task.title;
+  return getProjectById(db, task.projectId)?.name ?? task.title;
+}
+
 export interface RangeFilter {
   fromKey: string;
   toKey: string;
   employeeId?: EmployeeId | "all";
+  teamId?: string | "all";
   location?: WorkLocation | "all";
   /** Filter by the task's current status (work entries do not own status). */
   taskStatus?: Task["currentStatus"] | "all";
@@ -164,11 +207,13 @@ export interface RangeFilter {
 
 export function filterEntries(db: WorkLogDatabase, filter: RangeFilter): WorkEntry[] {
   const taskStatuses = new Map(db.tasks.map((task) => [task.id, task.currentStatus]));
+  const taskTeams = new Map(db.tasks.map((task) => [task.id, task.teamId]));
   return db.entries
     .filter((e) => {
       const key = dateKeyOf(e.startAt);
       if (key < filter.fromKey || key > filter.toKey) return false;
       if (filter.employeeId && filter.employeeId !== "all" && e.employeeId !== filter.employeeId) return false;
+      if (filter.teamId && filter.teamId !== "all" && taskTeams.get(e.taskId) !== filter.teamId) return false;
       if (filter.location && filter.location !== "all" && e.workLocation !== filter.location) return false;
       if (filter.taskStatus && filter.taskStatus !== "all" && taskStatuses.get(e.taskId) !== filter.taskStatus) return false;
       if (filter.hours === "normal" && e.normalMinutes === 0) return false;

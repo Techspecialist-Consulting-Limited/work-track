@@ -4,12 +4,19 @@ import { AuthzError, getMembership } from "@/lib/auth/authorize";
 import {
   addProgressUpdateAction,
   addWorkEntryAction,
+  archiveTeamProjectAction,
+  assignEmployeeTeamAction,
+  createStaffProjectAction,
   createSubtaskAction,
   createTaskAction,
+  createTeamAction,
+  createTeamProjectAction,
   editProgressUpdateAction,
   editWorkEntryAction,
   endBreakAction,
   inviteChairmanAction,
+  promoteTeamProjectAction,
+  selectTeamAction,
   setManagementReviewAction,
   snapshotFor,
   startBreakAction,
@@ -19,6 +26,8 @@ import {
   updateSubtaskStatusAction,
   updateTaskAction,
   updateTaskStatusAction,
+  updateTeamAction,
+  updateTeamProjectAction,
   voidWorkEntryAction,
   type ActionResult,
 } from "@/lib/db/worklog-actions";
@@ -105,6 +114,33 @@ export async function POST(request: Request) {
         break;
       case "voidEntry":
         result = await voidWorkEntryAction(membership, String(p.entryId));
+        break;
+      case "selectTeam":
+        result = await selectTeamAction(membership, p as never);
+        break;
+      case "createStaffProject":
+        result = await createStaffProjectAction(membership, p as never);
+        break;
+      case "createTeam":
+        result = await createTeamAction(membership, p as never);
+        break;
+      case "updateTeam":
+        result = await updateTeamAction(membership, p as never);
+        break;
+      case "assignEmployeeTeam":
+        result = await assignEmployeeTeamAction(membership, p as never);
+        break;
+      case "createTeamProject":
+        result = await createTeamProjectAction(membership, p as never);
+        break;
+      case "updateTeamProject":
+        result = await updateTeamProjectAction(membership, p as never);
+        break;
+      case "archiveTeamProject":
+        result = await archiveTeamProjectAction(membership, p as never);
+        break;
+      case "promoteTeamProject":
+        result = await promoteTeamProjectAction(membership, p as never);
         break;
       default:
         return NextResponse.json({ ok: false, message: "Unknown action." }, { status: 400 });

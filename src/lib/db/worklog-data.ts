@@ -3,6 +3,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./index";
 import {
   employees,
+  employeeTeams,
   memberships,
   subtaskStatusHistory,
   taskCategories,
@@ -11,17 +12,22 @@ import {
   taskStatusHistory,
   taskSubtasks,
   tasks,
+  teamProjects,
+  teams,
   timeEntries,
 } from "./schema";
 import type {
   BreakEntry,
   Employee,
+  EmployeeTeam,
   ProgressUpdate,
   ProgressUpdateRevision,
   StatusHistoryEvent,
   Subtask,
   Task,
   TaskCategory,
+  Team,
+  TeamProject,
   WorkEntry,
   WorkLogDatabase,
 } from "@/lib/worklog/types";
@@ -43,8 +49,11 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
 
   const employeeIds = employeeRows.map((e) => e.id);
   const empty: WorkLogDatabase = {
-    version: 1,
+    version: 2,
     employees: [],
+    teams: [],
+    employeeTeams: [],
+    projects: [],
     categories: [],
     tasks: [],
     subtasks: [],
@@ -55,23 +64,40 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
   };
   if (employeeIds.length === 0) return empty;
 
-  const [categoryRows, membershipRows, taskRows, entryRows] = await Promise.all([
-    db.select().from(taskCategories).where(eq(taskCategories.isActive, true)).orderBy(asc(taskCategories.name)),
-    db
-      .select({ id: memberships.id, name: employees.fullName })
-      .from(memberships)
-      .leftJoin(employees, eq(memberships.employeeId, employees.id)),
-    db.select().from(tasks).where(inArray(tasks.employeeId, employeeIds)).orderBy(asc(tasks.createdAt)),
-    db
-      .select()
-      .from(timeEntries)
-      .where(inArray(timeEntries.employeeId, employeeIds))
-      .orderBy(asc(timeEntries.startAt)),
-  ]);
+  const [categoryRows, membershipRows, taskRows, entryRows, teamRows, employeeTeamRows] =
+    await Promise.all([
+      db.select().from(taskCategories).where(eq(taskCategories.isActive, true)).orderBy(asc(taskCategories.name)),
+      db
+        .select({ id: memberships.id, name: employees.fullName })
+        .from(memberships)
+        .leftJoin(employees, eq(memberships.employeeId, employees.id)),
+      db.select().from(tasks).where(inArray(tasks.employeeId, employeeIds)).orderBy(asc(tasks.createdAt)),
+      db
+        .select()
+        .from(timeEntries)
+        .where(inArray(timeEntries.employeeId, employeeIds))
+        .orderBy(asc(timeEntries.startAt)),
+      db.select().from(teams).orderBy(asc(teams.name)),
+      db.select().from(employeeTeams).where(inArray(employeeTeams.employeeId, employeeIds)),
+    ]);
 
-  const membershipNames = new Map(membershipRows.map((row) => [row.id, row.name ?? undefined]));
   const employeeNames = new Map(employeeRows.map((row) => [row.id, row.fullName]));
   const categoryNames = new Map(categoryRows.map((row) => [row.id, row.name]));
+
+  // Staff only see the teams they belong to; management sees every team.
+  const visibleTeamIds = scope.employeeId
+    ? new Set(employeeTeamRows.map((row) => row.teamId))
+    : new Set(teamRows.map((row) => row.id));
+
+  const projectRows = visibleTeamIds.size
+    ? await db
+        .select()
+        .from(teamProjects)
+        .where(inArray(teamProjects.teamId, [...visibleTeamIds]))
+        .orderBy(asc(teamProjects.name))
+    : [];
+
+  const membershipNames = new Map(membershipRows.map((row) => [row.id, row.name ?? undefined]));
   const taskIds = taskRows.map((t) => t.id);
 
   const [subtaskRows, progressRows, taskHistoryRows, subtaskHistoryRows] = taskIds.length
@@ -169,6 +195,8 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     description: t.description ?? undefined,
     categoryId: t.categoryId ?? undefined,
     categoryName: t.categoryId ? categoryNames.get(t.categoryId) : undefined,
+    teamId: t.teamId ?? undefined,
+    projectId: t.projectId ?? undefined,
     currentStatus: t.currentStatus,
     blockerReason: t.blockerReason ?? undefined,
     droppedReason: t.droppedReason ?? undefined,
@@ -227,6 +255,48 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
 
   const mappedCategories: TaskCategory[] = categoryRows.map((row) => ({ id: row.id, name: row.name }));
 
+  const mappedTeams: Team[] = teamRows
+    .filter((row) => visibleTeamIds.has(row.id))
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description ?? undefined,
+      isActive: row.isActive,
+      isDefault: row.isDefault,
+      origin: row.origin as Team["origin"],
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+
+  const mappedEmployeeTeams: EmployeeTeam[] = employeeTeamRows
+    .filter((row) => visibleTeamIds.has(row.teamId))
+    .map((row) => ({
+      id: row.id,
+      employeeId: row.employeeId,
+      teamId: row.teamId,
+      createdAt: row.createdAt.toISOString(),
+    }));
+
+  const mappedProjects: TeamProject[] = projectRows.map((row) => ({
+    id: row.id,
+    teamId: row.teamId,
+    name: row.name,
+    description: row.description ?? undefined,
+    isActive: row.isActive,
+    origin: row.origin as TeamProject["origin"],
+    createdByEmployeeId: row.createdByEmployeeId ?? undefined,
+    createdByName: row.createdByEmployeeId
+      ? employeeNames.get(row.createdByEmployeeId)
+      : undefined,
+    promotedAt: toIso(row.promotedAt),
+    promotedByName: row.promotedByMembershipId
+      ? membershipNames.get(row.promotedByMembershipId)
+      : undefined,
+    archivedAt: toIso(row.archivedAt),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }));
+
   const statusHistory: StatusHistoryEvent[] = [
     ...taskHistoryRows.map((row) => ({
       id: row.id,
@@ -254,8 +324,11 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
   ].sort((a, b) => a.changedAt.localeCompare(b.changedAt));
 
   return {
-    version: 1,
+    version: 2,
     employees: mappedEmployees,
+    teams: mappedTeams,
+    employeeTeams: mappedEmployeeTeams,
+    projects: mappedProjects,
     categories: mappedCategories,
     tasks: mappedTasks,
     subtasks: mappedSubtasks,

@@ -6,6 +6,7 @@ import { TASK_STATUS_LABELS } from "@/lib/worklog/config";
 import {
   addProgressUpdate,
   addWorkEntry,
+  createStaffProject,
   createSubtask,
   createTask,
   deleteWorkEntry,
@@ -14,7 +15,9 @@ import {
   endBreak,
   getDatabaseSnapshot,
   getServerSnapshot,
+  getSessionActiveTeamId,
   getSessionEmployeeId,
+  selectTeam,
   startBreak,
   subscribeToDatabase,
   updateBreak,
@@ -28,12 +31,19 @@ import {
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { dateKeyOf, formatTime } from "@/lib/worklog/time";
 import { breakDeadline } from "@/lib/worklog/validation";
-import { getDaySummary, getOpenTasks, getSubtasksForTask, getTaskById } from "@/lib/worklog/selectors";
+import {
+  getDaySummary,
+  getOpenTasks,
+  getProjectById,
+  getProjectsForTeam,
+  getSubtasksForTask,
+  getTaskById,
+  getTeamsForEmployee,
+} from "@/lib/worklog/selectors";
 import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib/worklog/types";
 import {
   getTaskStatusCounts,
   makeWorkSlots,
-  NEW_TASK,
   SCHEDULED_MINUTES,
   slotEndInstant,
   toLagosIso,
@@ -54,17 +64,19 @@ export function useWorkLogController() {
   const meId = getSessionEmployeeId() ?? db.employees[0]?.id ?? "";
   const mounted = useSyncExternalStore(subscribeNoop, getClientMounted, getServerMounted);
   const [now, setNow] = useState<Date>(() => new Date());
-  const [taskSearch, setTaskSearch] = useState("");
-  const [taskMode, setTaskMode] = useState<"continue" | "new">(() =>
-    openTasksWithEntries(getServerSnapshot(), meId).length ? "continue" : "new"
-  );
-  const initialOpenTasks = openTasksWithEntries(getServerSnapshot(), meId);
-  const [taskChoice, setTaskChoice] = useState(initialOpenTasks[0]?.id ?? "");
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [newTaskDescription, setNewTaskDescription] = useState("");
-  const [newTaskCategory, setNewTaskCategory] = useState("");
-  const [newTaskNote, setNewTaskNote] = useState("");
-  const [newTaskSubtasks, setNewTaskSubtasks] = useState<string[]>([]);
+  const [teamChoice, setTeamChoice] = useState<string>(() => getSessionActiveTeamId() ?? "");
+  const [projectChoice, setProjectChoice] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [activityChoice, setActivityChoice] = useState("");
+  const [newActivityTitle, setNewActivityTitle] = useState("");
+  const [addingActivity, setAddingActivity] = useState(false);
+  const [showProjectInfo, setShowProjectInfo] = useState(false);
+  const [showAddProject, setShowAddProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [duplicateProject, setDuplicateProject] = useState<{ id: string; name: string } | null>(null);
+  const [addingProject, setAddingProject] = useState(false);
   const [description, setDescription] = useState("");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
@@ -77,7 +89,6 @@ export function useWorkLogController() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDateKey, setEditingDateKey] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState("");
-  const [subtaskChoice, setSubtaskChoice] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [recordsOpen, setRecordsOpen] = useState(false);
@@ -120,25 +131,29 @@ export function useWorkLogController() {
     [db.tasks, meId, taskIdsWithEntries]
   );
   const activeBreak = db.breaks.find((brk) => brk.employeeId === meId && brk.endAt === null) ?? null;
-  const selectedTask = taskChoice && taskChoice !== NEW_TASK ? getTaskById(db, taskChoice) : undefined;
-  const selectedTaskSubtasks = selectedTask ? getSubtasksForTask(db, selectedTask.id) : [];
+  const teams = useMemo(() => getTeamsForEmployee(db, meId), [db, meId]);
+  const activeTeamId = teamChoice || getSessionActiveTeamId() || teams[0]?.id || "";
+  const activeTeam = teams.find((team) => team.id === activeTeamId);
+  const projects = useMemo(
+    () => (activeTeamId ? getProjectsForTeam(db, activeTeamId) : []),
+    [db, activeTeamId]
+  );
+  const selectedProject = projectChoice ? getProjectById(db, projectChoice) : undefined;
+  const projectTask = selectedProject
+    ? db.tasks.find(
+        (task) =>
+          task.employeeId === meId && task.projectId === selectedProject.id && !task.archivedAt
+      )
+    : undefined;
+  const projectSubtasks = projectTask ? getSubtasksForTask(db, projectTask.id) : [];
+  const filteredProjects = projects.filter((project) =>
+    project.name.toLocaleLowerCase().includes(projectSearch.trim().toLocaleLowerCase())
+  );
   const detailTask = taskDetailsTaskId ? getTaskById(db, taskDetailsTaskId) : undefined;
   const slots = useMemo(
     () => makeWorkSlots(todayKey, db.entries.filter((entry) => entry.employeeId === meId), db.breaks.filter((brk) => brk.employeeId === meId), now),
     [db.entries, db.breaks, meId, todayKey, now]
   );
-  const matchingTasks = openTasks.filter((task) => task.title.toLocaleLowerCase().includes(taskSearch.toLocaleLowerCase()));
-  const taskOptions = [
-    ...matchingTasks.map((task) => ({
-      value: task.id,
-      label: task.title,
-      description: TASK_STATUS_LABELS[task.currentStatus],
-    })),
-    ...(selectedTask && !openTasks.some((task) => task.id === selectedTask.id)
-      ? [{ value: selectedTask.id, label: selectedTask.title, description: TASK_STATUS_LABELS[selectedTask.currentStatus], disabled: false }]
-      : []),
-    { value: NEW_TASK, label: "Start a new task", description: "Create a task and log work on it" },
-  ];
   const effectiveDateKey = editingDateKey ?? todayKey;
   const workdayPeriod = getSchedulePeriod(now);
   const workdayStatus = workdayPeriod === "normal_hours"
@@ -149,8 +164,6 @@ export function useWorkLogController() {
         ? `Starts at ${WORKTRACK_SCHEDULE.startTime}`
         : "Outside scheduled hours";
   const isHistoricalEdit = Boolean(editingDateKey && editingDateKey !== todayKey);
-  const effectiveTaskMode = openTasks.length === 0 && !editingId ? "new" : taskMode;
-  const categories = db.categories;
 
   const nowMs = now.getTime();
   const nextAvailableSlot =
@@ -198,15 +211,17 @@ export function useWorkLogController() {
   }
 
   function resetForm() {
-    const availableTasks = openTasksWithEntries(getDatabaseSnapshot(), meId);
-    setTaskMode(availableTasks.length ? "continue" : "new");
-    setTaskChoice(availableTasks[0]?.id ?? "");
-    setNewTaskTitle("");
-    setNewTaskDescription("");
-    setNewTaskCategory("");
-    setNewTaskNote("");
-    setNewTaskSubtasks([]);
-    setTaskSearch("");
+    setProjectChoice("");
+    setProjectSearch("");
+    setActivityChoice("");
+    setNewActivityTitle("");
+    setAddingActivity(false);
+    setShowProjectInfo(false);
+    setShowAddProject(false);
+    setNewProjectName("");
+    setNewProjectDescription("");
+    setProjectError(null);
+    setDuplicateProject(null);
     setDescription("");
     setEvidenceLink("");
     setShowEvidenceLink(false);
@@ -216,18 +231,21 @@ export function useWorkLogController() {
     setEditingId(null);
     setEditingDateKey(null);
     setSelectedSlot("");
-    setSubtaskChoice("");
     setLocation("office");
     setError(null);
   }
 
   function beginEdit(entry: WorkEntry) {
     const dayKey = dateKeyOf(entry.startAt);
+    const task = getTaskById(getDatabaseSnapshot(), entry.taskId);
     setEditingId(entry.id);
     setEditingDateKey(dayKey);
-    setTaskMode("continue");
-    setTaskChoice(entry.taskId);
-    setSubtaskChoice(entry.subtaskId ?? "");
+    if (task?.teamId) setTeamChoice(task.teamId);
+    setProjectChoice(task?.projectId ?? "");
+    setProjectSearch("");
+    setActivityChoice(entry.subtaskId ?? "");
+    setNewActivityTitle("");
+    setAddingActivity(false);
     setDescription(entry.description);
     setStartTime(formatTime(entry.startAt));
     setEndTime(formatTime(entry.endAt));
@@ -243,16 +261,79 @@ export function useWorkLogController() {
     window.setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   }
 
-  function selectTaskMode(mode: "continue" | "new") {
-    setTaskMode(mode);
-    setTaskChoice(mode === "continue" ? openTasks[0]?.id ?? "" : NEW_TASK);
-    setSubtaskChoice("");
+  function chooseTeam(teamId: string) {
+    setTeamChoice(teamId);
+    setProjectChoice("");
+    setProjectSearch("");
+    setActivityChoice("");
+    setNewActivityTitle("");
+    setAddingActivity(false);
+    setShowAddProject(false);
+    setProjectError(null);
+    setDuplicateProject(null);
+    setError(null);
+    if (teamId) selectTeam(teamId);
+  }
+
+  function chooseProject(projectId: string) {
+    setProjectChoice(projectId);
+    setActivityChoice("");
+    setNewActivityTitle("");
+    setAddingActivity(false);
+    setShowProjectInfo(false);
     setError(null);
   }
 
-  function chooseTask(taskId: string) {
-    setTaskChoice(taskId);
-    setSubtaskChoice("");
+  async function addProject() {
+    if (addingProject) return;
+    setProjectError(null);
+    setDuplicateProject(null);
+    const name = newProjectName.trim();
+    if (name.length < 2) {
+      setProjectError("Enter a project name of at least 2 characters.");
+      return;
+    }
+    if (!activeTeamId) {
+      setProjectError("Choose a team before adding a project.");
+      return;
+    }
+    setAddingProject(true);
+    try {
+      const result = await createStaffProject({
+        teamId: activeTeamId,
+        name,
+        description: newProjectDescription.trim() || undefined,
+      });
+      if (!result || result.ok === false) {
+        setProjectError(result?.message ?? "Could not add the project. Try again.");
+        if (result?.duplicateProjectId) {
+          setDuplicateProject({
+            id: result.duplicateProjectId,
+            name: result.duplicateProjectName ?? name,
+          });
+        }
+        return;
+      }
+      setProjectChoice(result.projectId ?? "");
+      setProjectSearch("");
+      setShowAddProject(false);
+      setNewProjectName("");
+      setNewProjectDescription("");
+      setNotice("Project added to your team's library.");
+    } finally {
+      setAddingProject(false);
+    }
+  }
+
+  function useExistingProject() {
+    if (!duplicateProject) return;
+    setProjectChoice(duplicateProject.id);
+    setProjectSearch("");
+    setShowAddProject(false);
+    setNewProjectName("");
+    setNewProjectDescription("");
+    setProjectError(null);
+    setDuplicateProject(null);
   }
 
   function selectSlot(slot: { key: string; start: string; end: string; available: boolean }) {
@@ -263,18 +344,6 @@ export function useWorkLogController() {
     setShowTimeAdjustment(false);
     setIsReportedOvertime(false);
     setError(null);
-  }
-
-  function addNewTaskSubtask() {
-    setNewTaskSubtasks((current) => [...current, ""]);
-  }
-
-  function updateNewTaskSubtask(index: number, value: string) {
-    setNewTaskSubtasks((current) => current.map((title, itemIndex) => (itemIndex === index ? value : title)));
-  }
-
-  function removeNewTaskSubtask(index: number) {
-    setNewTaskSubtasks((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   function submitEntry() {
@@ -303,37 +372,54 @@ export function useWorkLogController() {
       setError("Choose a valid time period. The end must be after the start.");
       return;
     }
-    if (effectiveTaskMode === "continue" && (!taskChoice || taskChoice === NEW_TASK)) {
-      setError("Choose an existing task or start a new one.");
+    if (!editingId && !activeTeamId) {
+      setError("Choose a team before saving your work.");
+      return;
+    }
+    if (!editingId && !selectedProject) {
+      setError("Choose a project, or add the missing project to your team's library.");
+      return;
+    }
+    if (addingActivity && !newActivityTitle.trim()) {
+      setError("Enter the activity name or clear the new activity field.");
       return;
     }
 
-    let taskId = taskChoice;
-    if (effectiveTaskMode === "new") {
+    let taskId = editingId ? getTaskById(getDatabaseSnapshot(), db.entries.find((e) => e.id === editingId)?.taskId ?? "")?.id ?? "" : "";
+    if (!taskId && selectedProject) {
       const created = createTask({
         employeeId: meId,
-        title: newTaskTitle,
-        description: newTaskDescription || undefined,
-        categoryId: newTaskCategory || undefined,
-        initialNote: newTaskNote || undefined,
-        subtasks: newTaskSubtasks
-          .filter((title) => title.trim())
-          .map((title) => ({ title })),
+        teamId: activeTeamId,
+        projectId: selectedProject.id,
       });
       if (!created.ok) {
         setError(created.message);
         return;
       }
       taskId = created.taskId;
-      setTaskChoice(taskId);
-      setTaskMode("continue");
-      setSubtaskChoice("");
+    }
+    if (!taskId) {
+      setError("Choose a project before saving your work.");
+      return;
+    }
+
+    let subtaskId = activityChoice || undefined;
+    if (addingActivity && newActivityTitle.trim()) {
+      const added = createSubtask({ taskId, title: newActivityTitle.trim() });
+      if (!added.ok) {
+        setError(added.message);
+        return;
+      }
+      const createdSubtask = getDatabaseSnapshot()
+        .subtasks.filter((subtask) => subtask.taskId === taskId)
+        .find((subtask) => subtask.title.toLocaleLowerCase() === newActivityTitle.trim().toLocaleLowerCase());
+      subtaskId = createdSubtask?.id;
     }
 
     const input: EntryInput = {
       employeeId: meId,
       taskId,
-      subtaskId: subtaskChoice || undefined,
+      subtaskId,
       description,
       startAt: toLagosIso(effectiveDateKey, startTime),
       endAt: toLagosIso(effectiveDateKey, endTime),
@@ -541,31 +627,43 @@ export function useWorkLogController() {
     openTasks,
     employeeTasks,
     activeBreak,
-    selectedTask,
-    selectedTaskSubtasks,
     detailTask,
     slots,
     nextAvailableSlot,
-    matchingTasks,
-    taskOptions,
-    taskSearch,
-    setTaskSearch,
-    taskMode,
-    taskChoice,
-    setTaskChoice: chooseTask,
-    newTaskTitle,
-    setNewTaskTitle,
-    newTaskDescription,
-    setNewTaskDescription,
-    newTaskCategory,
-    setNewTaskCategory,
-    newTaskNote,
-    setNewTaskNote,
-    newTaskSubtasks,
-    addNewTaskSubtask,
-    updateNewTaskSubtask,
-    removeNewTaskSubtask,
-    categories,
+    teams,
+    activeTeamId,
+    activeTeam,
+    chooseTeam,
+    projects,
+    filteredProjects,
+    projectSearch,
+    setProjectSearch,
+    projectChoice,
+    chooseProject,
+    selectedProject,
+    projectTask,
+    projectSubtasks,
+    activityChoice,
+    setActivityChoice,
+    newActivityTitle,
+    setNewActivityTitle,
+    addingActivity,
+    setAddingActivity,
+    showProjectInfo,
+    setShowProjectInfo,
+    showAddProject,
+    setShowAddProject,
+    newProjectName,
+    setNewProjectName,
+    newProjectDescription,
+    setNewProjectDescription,
+    projectError,
+    setProjectError,
+    duplicateProject,
+    setDuplicateProject,
+    addingProject,
+    addProject,
+    useExistingProject,
     description,
     setDescription,
     startTime,
@@ -588,8 +686,6 @@ export function useWorkLogController() {
     editingDateKey,
     selectedSlot,
     setSelectedSlot,
-    subtaskChoice,
-    setSubtaskChoice,
     error,
     setError,
     notice,
@@ -610,7 +706,6 @@ export function useWorkLogController() {
     effectiveDateKey,
     workdayStatus,
     isHistoricalEdit,
-    effectiveTaskMode,
     taskDetailsOpen,
     taskDetailsTaskId,
     progressUpdateTaskId,
@@ -619,7 +714,6 @@ export function useWorkLogController() {
     resetForm,
     beginEdit,
     deleteEntry,
-    selectTaskMode,
     selectSlot,
     submitEntry,
     handleStartBreak,

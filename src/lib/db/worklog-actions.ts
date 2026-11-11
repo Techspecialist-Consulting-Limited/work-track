@@ -5,7 +5,9 @@ import { db } from "./index";
 import {
   auditEvents,
   employees,
+  employeeTeams,
   invitations,
+  memberships,
   subtaskStatusHistory,
   taskCategories,
   taskProgressUpdateRevisions,
@@ -13,10 +15,12 @@ import {
   taskStatusHistory,
   taskSubtasks,
   tasks,
+  teamProjects,
+  teams,
   timeEntries,
 } from "./schema";
 import { loadWorkLogDb } from "./worklog-data";
-import type { WorkTrackMembership } from "@/lib/auth/authorize";
+import { getAuthorizedTeamIds, isEmployeeInTeam, type WorkTrackMembership } from "@/lib/auth/authorize";
 import {
   resolveBreakEnd,
   validateBreakAllowance,
@@ -34,8 +38,24 @@ import { splitIntervalMinutes } from "@/lib/worklog/time";
 import type { TaskStatus, WorkLogDatabase } from "@/lib/worklog/types";
 
 export type ActionResult =
-  | { ok: true; taskId?: string; subtaskId?: string; progressUpdateId?: string; adjustedEntry?: boolean }
-  | { ok: false; message: string };
+  | {
+      ok: true;
+      taskId?: string;
+      subtaskId?: string;
+      progressUpdateId?: string;
+      adjustedEntry?: boolean;
+      teamId?: string;
+      projectId?: string;
+      duplicateProjectId?: string;
+      duplicateProjectName?: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      /** Set when a staff project add collides with an existing project name. */
+      duplicateProjectId?: string;
+      duplicateProjectName?: string;
+    };
 
 interface EntryInput {
   employeeId: string;
@@ -106,14 +126,350 @@ async function ownedSubtask(taskId: string, subtaskId: string) {
   )[0];
 }
 
-/** Snapshot for reconciliation — "team" scope is management-only. */
+/** Snapshot for reconciliation — "team"/"config" scope is privileged. */
 export async function snapshotFor(
   membership: WorkTrackMembership,
   scope?: string
 ): Promise<WorkLogDatabase> {
   const isManagement = membership.role === "hr" || membership.role === "chairman";
   if (scope === "team" && isManagement) return loadWorkLogDb();
+  if (scope === "config" && membership.isConfigAdmin) return loadWorkLogDb();
   return membership.employeeId ? loadWorkLogDb({ employeeId: membership.employeeId }) : loadWorkLogDb();
+}
+
+/* ------------------------------------------------------------------ */
+/* Teams and project library                                          */
+/* ------------------------------------------------------------------ */
+
+function normalizeName(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+function configAdminOnly(membership: WorkTrackMembership): ActionResult | null {
+  if (!membership.isConfigAdmin) {
+    return { ok: false, message: "Configuration admin access required." };
+  }
+  return null;
+}
+
+async function activeTeam(teamId: string) {
+  return (
+    await db.select().from(teams).where(eq(teams.id, teamId)).limit(1)
+  )[0];
+}
+
+async function findDuplicateProject(teamId: string, name: string, ignoreId?: string) {
+  const rows = await db
+    .select()
+    .from(teamProjects)
+    .where(and(eq(teamProjects.teamId, teamId), isNull(teamProjects.archivedAt)));
+  const target = normalizeName(name);
+  return rows.find((row) => row.id !== ignoreId && normalizeName(row.name) === target);
+}
+
+/** Staff pick which of their assigned teams they are logging against. */
+export async function selectTeamAction(
+  membership: WorkTrackMembership,
+  input: { teamId: string }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  const team = await activeTeam(input.teamId);
+  if (!team || !team.isActive) return { ok: false, message: "Choose an active team." };
+  if (!(await isEmployeeInTeam(employeeId, team.id))) {
+    return { ok: false, message: "You are not assigned to that team." };
+  }
+  await db
+    .update(memberships)
+    .set({ activeTeamId: team.id, updatedAt: new Date() })
+    .where(eq(memberships.id, membership.membershipId));
+  await audit(membership, "team.select", "team", team.id, null, { teamId: team.id });
+  return { ok: true };
+}
+
+/**
+ * Staff add a project that is missing from their team's library. Duplicates are
+ * never merged silently: the caller gets the colliding project back and decides.
+ */
+export async function createStaffProjectAction(
+  membership: WorkTrackMembership,
+  input: { id: string; teamId: string; name: string; description?: string }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  const name = input.name.trim();
+  if (name.length < 2 || name.length > 160) {
+    return { ok: false, message: "Enter a project name between 2 and 160 characters." };
+  }
+  const description = input.description?.trim() || null;
+  if (description && description.length > 2000) {
+    return { ok: false, message: "Project description must be 2000 characters or fewer." };
+  }
+  const team = await activeTeam(input.teamId);
+  if (!team || !team.isActive) return { ok: false, message: "Choose an active team." };
+  if (!(await isEmployeeInTeam(employeeId, team.id))) {
+    return { ok: false, message: "You can only add projects to a team you belong to." };
+  }
+
+  const duplicate = await findDuplicateProject(team.id, name);
+  if (duplicate) {
+    return {
+      ok: false,
+      message: `"${duplicate.name}" already exists in ${team.name}. Use the existing project instead.`,
+      duplicateProjectId: duplicate.id,
+      duplicateProjectName: duplicate.name,
+    };
+  }
+
+  try {
+    await db.insert(teamProjects).values({
+      id: input.id,
+      teamId: team.id,
+      name,
+      description,
+      origin: "staff",
+      createdByEmployeeId: employeeId,
+      createdByMembershipId: membership.membershipId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("team_projects_team_name_key") || msg.includes("duplicate key")) {
+      const raced = await findDuplicateProject(team.id, name);
+      return {
+        ok: false,
+        message: raced
+          ? `"${raced.name}" already exists in ${team.name}. Use the existing project instead.`
+          : "That project was just added by someone else. Refresh and choose it.",
+        duplicateProjectId: raced?.id,
+        duplicateProjectName: raced?.name,
+      };
+    }
+    throw e;
+  }
+  await audit(membership, "project.create", "team_project", input.id, null, {
+    teamId: team.id,
+    name,
+    origin: "staff",
+  });
+  return { ok: true, projectId: input.id };
+}
+
+/* ------------------------- configuration admins ------------------------- */
+
+export async function createTeamAction(
+  membership: WorkTrackMembership,
+  input: { id: string; name: string; description?: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const name = input.name.trim();
+  if (name.length < 2 || name.length > 80) {
+    return { ok: false, message: "Enter a team name between 2 and 80 characters." };
+  }
+  const existing = (
+    await db.select({ id: teams.id }).from(teams).where(sql`lower(${teams.name}) = ${name.toLocaleLowerCase()}`).limit(1)
+  )[0];
+  if (existing) return { ok: false, message: "A team with that name already exists." };
+
+  await db.insert(teams).values({
+    id: input.id,
+    name,
+    description: input.description?.trim() || null,
+    origin: "admin",
+    createdByMembershipId: membership.membershipId,
+  });
+  await audit(membership, "team.create", "team", input.id, null, { name });
+  return { ok: true, teamId: input.id };
+}
+
+export async function updateTeamAction(
+  membership: WorkTrackMembership,
+  input: { teamId: string; name?: string; description?: string | null; isActive?: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const team = await activeTeam(input.teamId);
+  if (!team) return { ok: false, message: "Team not found." };
+
+  const set: Partial<typeof teams.$inferInsert> = { updatedAt: new Date() };
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (name.length < 2 || name.length > 80) {
+      return { ok: false, message: "Enter a team name between 2 and 80 characters." };
+    }
+    const clash = (
+      await db
+        .select({ id: teams.id })
+        .from(teams)
+        .where(and(sql`lower(${teams.name}) = ${name.toLocaleLowerCase()}`, sql`${teams.id} <> ${team.id}`))
+        .limit(1)
+    )[0];
+    if (clash) return { ok: false, message: "A team with that name already exists." };
+    set.name = name;
+  }
+  if (input.description !== undefined) set.description = input.description?.trim() || null;
+  if (input.isActive !== undefined) {
+    if (!input.isActive && team.isDefault) {
+      return { ok: false, message: "The default team cannot be deactivated. Set another team as default first." };
+    }
+    set.isActive = input.isActive;
+  }
+
+  await db.update(teams).set(set).where(eq(teams.id, team.id));
+  await audit(membership, "team.update", "team", team.id, { name: team.name, isActive: team.isActive }, set);
+  return { ok: true };
+}
+
+/** Add or remove an employee from a team. Staff always keep at least one team. */
+export async function assignEmployeeTeamAction(
+  membership: WorkTrackMembership,
+  input: { employeeId: string; teamId: string; assigned: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const employee = (
+    await db.select({ id: employees.id }).from(employees).where(eq(employees.id, input.employeeId)).limit(1)
+  )[0];
+  if (!employee) return { ok: false, message: "Employee not found." };
+  const team = await activeTeam(input.teamId);
+  if (!team) return { ok: false, message: "Team not found." };
+
+  if (input.assigned) {
+    await db
+      .insert(employeeTeams)
+      .values({ employeeId: employee.id, teamId: team.id, createdByMembershipId: membership.membershipId })
+      .onConflictDoNothing();
+  } else {
+    const others = await getAuthorizedTeamIds(employee.id);
+    if (others.filter((id) => id !== team.id).length === 0) {
+      return { ok: false, message: "Staff need at least one team. Assign another team before removing this one." };
+    }
+    await db
+      .delete(employeeTeams)
+      .where(and(eq(employeeTeams.employeeId, employee.id), eq(employeeTeams.teamId, team.id)));
+    await db
+      .update(memberships)
+      .set({ activeTeamId: null, updatedAt: new Date() })
+      .where(and(eq(memberships.employeeId, employee.id), eq(memberships.activeTeamId, team.id)));
+  }
+  await audit(membership, input.assigned ? "team.assign" : "team.unassign", "employee_team", null, null, {
+    employeeId: employee.id,
+    teamId: team.id,
+  });
+  return { ok: true };
+}
+
+export async function createTeamProjectAction(
+  membership: WorkTrackMembership,
+  input: { id: string; teamId: string; name: string; description?: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const name = input.name.trim();
+  if (name.length < 2 || name.length > 160) {
+    return { ok: false, message: "Enter a project name between 2 and 160 characters." };
+  }
+  const team = await activeTeam(input.teamId);
+  if (!team) return { ok: false, message: "Team not found." };
+  const duplicate = await findDuplicateProject(team.id, name);
+  if (duplicate) {
+    return {
+      ok: false,
+      message: `"${duplicate.name}" already exists in ${team.name}.`,
+      duplicateProjectId: duplicate.id,
+      duplicateProjectName: duplicate.name,
+    };
+  }
+  await db.insert(teamProjects).values({
+    id: input.id,
+    teamId: team.id,
+    name,
+    description: input.description?.trim() || null,
+    origin: "admin",
+    createdByMembershipId: membership.membershipId,
+    promotedAt: new Date(),
+    promotedByMembershipId: membership.membershipId,
+  });
+  await audit(membership, "project.create", "team_project", input.id, null, { teamId: team.id, name });
+  return { ok: true, projectId: input.id };
+}
+
+export async function updateTeamProjectAction(
+  membership: WorkTrackMembership,
+  input: { projectId: string; name?: string; description?: string | null; isActive?: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const project = (
+    await db.select().from(teamProjects).where(eq(teamProjects.id, input.projectId)).limit(1)
+  )[0];
+  if (!project || project.archivedAt) return { ok: false, message: "Project not found." };
+
+  const set: Partial<typeof teamProjects.$inferInsert> = { updatedAt: new Date() };
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (name.length < 2 || name.length > 160) {
+      return { ok: false, message: "Enter a project name between 2 and 160 characters." };
+    }
+    const duplicate = await findDuplicateProject(project.teamId, name, project.id);
+    if (duplicate) return { ok: false, message: `"${duplicate.name}" already exists in this team.` };
+    set.name = name;
+  }
+  if (input.description !== undefined) set.description = input.description?.trim() || null;
+  if (input.isActive !== undefined) set.isActive = input.isActive;
+
+  await db.update(teamProjects).set(set).where(eq(teamProjects.id, project.id));
+  await audit(membership, "project.update", "team_project", project.id, { name: project.name }, set);
+  return { ok: true, projectId: project.id };
+}
+
+/** Archive keeps history intact: tasks and entries still resolve the project. */
+export async function archiveTeamProjectAction(
+  membership: WorkTrackMembership,
+  input: { projectId: string; archived: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const project = (
+    await db.select().from(teamProjects).where(eq(teamProjects.id, input.projectId)).limit(1)
+  )[0];
+  if (!project) return { ok: false, message: "Project not found." };
+
+  await db
+    .update(teamProjects)
+    .set({
+      isActive: !input.archived,
+      archivedAt: input.archived ? new Date() : null,
+      updatedAt: new Date(),
+    })
+    .where(eq(teamProjects.id, project.id));
+  await audit(membership, input.archived ? "project.archive" : "project.restore", "team_project", project.id, null, {
+    archived: input.archived,
+  });
+  return { ok: true, projectId: project.id };
+}
+
+/** Promote a staff-added project so it is marked as reviewed by an admin. */
+export async function promoteTeamProjectAction(
+  membership: WorkTrackMembership,
+  input: { projectId: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const project = (
+    await db.select().from(teamProjects).where(eq(teamProjects.id, input.projectId)).limit(1)
+  )[0];
+  if (!project) return { ok: false, message: "Project not found." };
+  if (project.origin !== "staff") return { ok: true, projectId: project.id };
+
+  await db
+    .update(teamProjects)
+    .set({
+      promotedAt: new Date(),
+      promotedByMembershipId: membership.membershipId,
+      updatedAt: new Date(),
+    })
+    .where(eq(teamProjects.id, project.id));
+  await audit(membership, "project.promote", "team_project", project.id, null, { name: project.name });
+  return { ok: true, projectId: project.id };
 }
 
 /* ------------------------------------------------------------------ */
@@ -125,10 +481,10 @@ export async function createTaskAction(
   input: {
     id: string;
     employeeId?: string;
-    title: string;
+    title?: string;
     description?: string;
-    categoryId?: string | null;
-    initialNote?: string;
+    teamId?: string | null;
+    projectId?: string | null;
     subtasks?: { id?: string; title: string; description?: string }[];
   }
 ): Promise<ActionResult> {
@@ -136,21 +492,27 @@ export async function createTaskAction(
   if (input.employeeId && input.employeeId !== employeeId) {
     return { ok: false, message: "You can only create your own tasks." };
   }
-  const title = validateTaskTitle(input.title);
-  if (!title.ok) return title;
 
-  const categoryId = input.categoryId?.trim() || null;
-  if (categoryId) {
-    const category = (
-      await db.select({ id: taskCategories.id }).from(taskCategories).where(eq(taskCategories.id, categoryId)).limit(1)
+  let title: string;
+  let teamId: string | null = input.teamId?.trim() || null;
+  const projectId: string | null = input.projectId?.trim() || null;
+
+  if (projectId) {
+    const project = (
+      await db.select().from(teamProjects).where(eq(teamProjects.id, projectId)).limit(1)
     )[0];
-    if (!category) return { ok: false, message: "Choose a valid category." };
-  }
-
-  const initialNote = input.initialNote?.trim() ?? "";
-  if (initialNote) {
-    const noteCheck = validateProgressBody(initialNote);
-    if (!noteCheck.ok) return noteCheck;
+    if (!project || project.archivedAt || !project.isActive) {
+      return { ok: false, message: "Choose an active project from your team." };
+    }
+    if (!(await isEmployeeInTeam(employeeId, project.teamId))) {
+      return { ok: false, message: "That project belongs to a team you are not assigned to." };
+    }
+    teamId = project.teamId;
+    title = project.name;
+  } else {
+    const checked = validateTaskTitle(input.title ?? "");
+    if (!checked.ok) return checked;
+    title = input.title!.trim();
   }
 
   const subtasks = (input.subtasks ?? []).filter((subtask) => subtask.title.trim());
@@ -160,14 +522,33 @@ export async function createTaskAction(
     if (!check.ok) return check;
   }
 
+  // A project maps to exactly one open task per employee: reuse it if it exists.
+  if (projectId) {
+    const existing = (
+      await db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.employeeId, employeeId),
+            eq(tasks.projectId, projectId),
+            isNull(tasks.archivedAt)
+          )
+        )
+        .limit(1)
+    )[0];
+    if (existing) return { ok: true, taskId: existing.id, projectId };
+  }
+
   const now = new Date();
   try {
     await db.transaction(async (tx) => {
       await tx.insert(tasks).values({
         id: input.id,
         employeeId,
-        categoryId,
-        title: input.title.trim(),
+        teamId,
+        projectId,
+        title,
         description: input.description?.trim() || null,
         currentStatus: "ongoing",
         statusUpdatedAt: now,
@@ -178,7 +559,7 @@ export async function createTaskAction(
         previousStatus: null,
         newStatus: "ongoing",
         changedByMembershipId: membership.membershipId,
-        changeNote: "Task created",
+        changeNote: projectId ? "Task created from a team project" : "Task created",
         changedAt: now,
       });
       for (let index = 0; index < subtasks.length; index += 1) {
@@ -203,13 +584,6 @@ export async function createTaskAction(
           changedAt: now,
         });
       }
-      if (initialNote) {
-        await tx.insert(taskProgressUpdates).values({
-          taskId: input.id,
-          authorEmployeeId: employeeId,
-          body: initialNote,
-        });
-      }
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "";
@@ -218,8 +592,13 @@ export async function createTaskAction(
     }
     throw e;
   }
-  await audit(membership, "task.create", "task", input.id, null, { title: input.title.trim(), subtasks: subtasks.length });
-  return { ok: true, taskId: input.id };
+  await audit(membership, "task.create", "task", input.id, null, {
+    title,
+    teamId,
+    projectId,
+    subtasks: subtasks.length,
+  });
+  return { ok: true, taskId: input.id, projectId: projectId ?? undefined };
 }
 
 export async function updateTaskAction(
@@ -978,8 +1357,11 @@ export async function updateBreakAction(
     }));
     const allowance = validateBreakAllowance(
       {
-        version: 1,
+        version: 2,
         employees: [],
+        teams: [],
+        employeeTeams: [],
+        projects: [],
         categories: [],
         tasks: [],
         subtasks: [],

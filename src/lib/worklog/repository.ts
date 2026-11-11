@@ -38,8 +38,11 @@ function queueAfter(taskId: string | undefined, send: () => void) {
 }
 
 const EMPTY_DB: WorkLogDatabase = {
-  version: 1,
+  version: 2,
   employees: [],
+  teams: [],
+  employeeTeams: [],
+  projects: [],
   categories: [],
   tasks: [],
   subtasks: [],
@@ -54,6 +57,8 @@ let cache: WorkLogDatabase | null = null;
 let sessionEmployeeId: string | null = null;
 let sessionUser: { name: string | null; email: string | null } | null = null;
 let sessionRole: string | null = null;
+let sessionIsConfigAdmin = false;
+let sessionActiveTeamId: string | null = null;
 let loadPromise: Promise<void> | null = null;
 let hydrated = false;
 
@@ -61,6 +66,8 @@ interface StateResponse {
   db?: WorkLogDatabase;
   employeeId?: string | null;
   role?: string;
+  isConfigAdmin?: boolean;
+  activeTeamId?: string | null;
   user?: { name: string | null; email: string | null } | null;
   error?: string;
 }
@@ -69,8 +76,11 @@ function isDatabase(value: unknown): value is WorkLogDatabase {
   if (!value || typeof value !== "object") return false;
   const db = value as Partial<WorkLogDatabase>;
   return (
-    db.version === 1 &&
+    db.version === 2 &&
     Array.isArray(db.employees) &&
+    Array.isArray(db.teams) &&
+    Array.isArray(db.employeeTeams) &&
+    Array.isArray(db.projects) &&
     Array.isArray(db.tasks) &&
     Array.isArray(db.subtasks) &&
     Array.isArray(db.progressUpdates) &&
@@ -84,8 +94,9 @@ function emit(db: WorkLogDatabase) {
   listeners.forEach((listener) => listener());
 }
 
-function currentScope(): "me" | "team" {
+function currentScope(): "me" | "team" | "config" {
   if (typeof window === "undefined") return "me";
+  if (window.location.pathname.startsWith("/admin")) return "config";
   return window.location.pathname.startsWith("/executive") ? "team" : "me";
 }
 
@@ -97,6 +108,8 @@ async function fetchState(): Promise<void> {
   sessionEmployeeId = data.employeeId ?? null;
   sessionUser = data.user ?? null;
   sessionRole = data.role ?? null;
+  sessionIsConfigAdmin = Boolean(data.isConfigAdmin);
+  sessionActiveTeamId = data.activeTeamId ?? null;
   hydrated = true;
   emit(data.db);
 }
@@ -138,6 +151,14 @@ export function getSessionUser(): { name: string | null; email: string | null } 
 
 export function getSessionRole(): string | null {
   return sessionRole;
+}
+
+export function getSessionIsConfigAdmin(): boolean {
+  return sessionIsConfigAdmin;
+}
+
+export function getSessionActiveTeamId(): string | null {
+  return sessionActiveTeamId;
 }
 
 /** Saves the staff member's own profile (name/photo). Resolves with the server result. */
@@ -188,6 +209,10 @@ interface SyncResponse {
   subtaskId?: string;
   progressUpdateId?: string;
   adjustedEntry?: boolean;
+  teamId?: string;
+  projectId?: string;
+  duplicateProjectId?: string;
+  duplicateProjectName?: string;
 }
 
 async function syncAction(action: string, payload: Record<string, unknown>): Promise<SyncResponse | null> {
@@ -229,10 +254,10 @@ export interface EntryInput {
 
 export interface TaskInput {
   employeeId: EmployeeId;
-  title: string;
+  title?: string;
   description?: string;
-  categoryId?: string | null;
-  initialNote?: string;
+  teamId?: string;
+  projectId?: string;
   subtasks?: { title: string; description?: string }[];
 }
 
@@ -351,25 +376,36 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
 }
 
 export function createTask(input: TaskInput): { ok: true; taskId: string } | { ok: false; message: string } {
-  const check = validateTaskTitle(input.title);
-  if (!check.ok) return check;
-  const note = input.initialNote?.trim();
-  if (note) {
-    const noteCheck = validateProgressBody(note);
-    if (!noteCheck.ok) return noteCheck;
-  }
   const db = getDatabaseSnapshot();
+  const project = input.projectId
+    ? db.projects.find((candidate) => candidate.id === input.projectId)
+    : undefined;
+
+  let title: string;
+  if (input.projectId) {
+    if (!project || project.archivedAt || !project.isActive) {
+      return { ok: false, message: "Choose an active project from your team." };
+    }
+    title = project.name;
+    const existing = db.tasks.find(
+      (task) => task.employeeId === input.employeeId && task.projectId === project.id && !task.archivedAt
+    );
+    if (existing) return { ok: true, taskId: existing.id };
+  } else {
+    const check = validateTaskTitle(input.title ?? "");
+    if (!check.ok) return check;
+    title = input.title!.trim();
+  }
+
   const now = new Date().toISOString();
   const taskId = newId();
   const task: Task = {
     id: taskId,
     employeeId: input.employeeId,
-    title: input.title.trim(),
+    title,
     description: input.description?.trim() || undefined,
-    categoryId: input.categoryId?.trim() || undefined,
-    categoryName: input.categoryId
-      ? db.categories.find((category) => category.id === input.categoryId)?.name
-      : undefined,
+    teamId: project?.teamId ?? input.teamId,
+    projectId: project?.id,
     currentStatus: "ongoing",
     createdAt: now,
     updatedAt: now,
@@ -395,28 +431,17 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
     });
   }
 
-  const progress: ProgressUpdate[] = note
-    ? [
-        {
-          id: newId(),
-          taskId,
-          authorEmployeeId: input.employeeId,
-          body: note,
-          createdAt: now,
-          updatedAt: now,
-          revisions: [],
-        },
-      ]
-    : [];
-
   emit({
     ...db,
     tasks: [...db.tasks, task],
     subtasks: [...db.subtasks, ...subtaskRows],
-    progressUpdates: [...db.progressUpdates, ...progress],
   });
   const sync = syncAction("createTask", {
-    ...input,
+    employeeId: input.employeeId,
+    title,
+    description: input.description,
+    teamId: task.teamId,
+    projectId: task.projectId,
     id: taskId,
     subtasks: requestedSubtasks.map((subtask, index) => ({ ...subtask, id: subtaskRows[index].id })),
   });
@@ -518,7 +543,9 @@ export function createSubtask(input: { taskId: string; title: string; descriptio
     statusUpdatedAt: now,
   };
   emit({ ...db, subtasks: [...db.subtasks, subtask] });
-  void syncAction("createSubtask", { ...input, id });
+  const sync = syncAction("createSubtask", { ...input, id });
+  pendingSyncs.set(input.taskId, sync);
+  void sync.finally(() => pendingSyncs.delete(input.taskId));
   return { ok: true };
 }
 
@@ -809,6 +836,67 @@ export function updateBreak(input: {
   });
   void syncAction("updateBreak", input);
   return { ok: true };
+}
+
+/** Staff select one of their assigned teams for logging. */
+export function selectTeam(teamId: string): MutationResult {
+  sessionActiveTeamId = teamId;
+  void syncAction("selectTeam", { teamId });
+  return { ok: true };
+}
+
+export function createStaffProject(input: {
+  teamId: string;
+  name: string;
+  description?: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("createStaffProject", { id: newId(), ...input });
+}
+
+export function createTeam(input: { name: string; description?: string }): Promise<SyncResponse | null> {
+  return syncAction("createTeam", { id: newId(), ...input });
+}
+
+export function updateTeam(input: {
+  teamId: string;
+  name?: string;
+  description?: string | null;
+  isActive?: boolean;
+}): Promise<SyncResponse | null> {
+  return syncAction("updateTeam", input);
+}
+
+export function assignEmployeeTeam(input: {
+  employeeId: string;
+  teamId: string;
+  assigned: boolean;
+}): Promise<SyncResponse | null> {
+  return syncAction("assignEmployeeTeam", input);
+}
+
+export function createTeamProject(input: {
+  teamId: string;
+  name: string;
+  description?: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("createTeamProject", { id: newId(), ...input });
+}
+
+export function updateTeamProject(input: {
+  projectId: string;
+  name?: string;
+  description?: string | null;
+  isActive?: boolean;
+}): Promise<SyncResponse | null> {
+  return syncAction("updateTeamProject", input);
+}
+
+export function archiveTeamProject(projectId: string, archived: boolean): Promise<SyncResponse | null> {
+  return syncAction("archiveTeamProject", { projectId, archived });
+}
+
+export function promoteTeamProject(projectId: string): Promise<SyncResponse | null> {
+  return syncAction("promoteTeamProject", { projectId });
 }
 
 /** Convenience for pickers: active categories from the snapshot. */

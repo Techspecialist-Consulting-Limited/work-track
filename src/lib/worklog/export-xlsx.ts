@@ -1,11 +1,14 @@
 import ExcelJS from "exceljs";
 import { WORK_LOCATION_LABELS, TASK_STATUS_LABELS } from "./config";
 import { dateKeyOf, durationMinutes, formatDateLabel } from "./time";
-import { filterEntries, type RangeFilter } from "./selectors";
-import type { WorkLogDatabase, WorkEntry } from "./types";
+import { filterEntries, getTaskProjectName, type RangeFilter } from "./selectors";
+import type { EmployeeId, WorkLogDatabase, WorkEntry } from "./types";
 import { getZonedDateParts, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 
 const HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF5B3FD9" } };
+
+/** Correct OOXML MIME so Excel opens the file as a workbook instead of a renamed archive. */
+export const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 function hours(minutes: number): number {
   return Math.round((minutes / 60) * 100) / 100;
@@ -30,10 +33,15 @@ function entryRow(db: WorkLogDatabase, e: WorkEntry) {
   const employee = db.employees.find((x) => x.id === e.employeeId);
   const task = db.tasks.find((t) => t.id === e.taskId);
   const subtask = e.subtaskId ? db.subtasks.find((s) => s.id === e.subtaskId) : undefined;
+  const project = task?.projectId ? db.projects.find((p) => p.id === task.projectId) : undefined;
+  const team = task?.teamId ? db.teams.find((t) => t.id === task.teamId) : undefined;
   return {
     date: formatDateLabel(dateKeyOf(e.startAt)),
     employee: employee?.name ?? e.employeeId,
+    team: team?.name ?? "",
     task: task?.title ?? "",
+    project: task ? getTaskProjectName(db, task) : "",
+    projectDescription: project?.description ?? "",
     subtask: subtask?.title ?? "",
     taskDescription: task?.description ?? "",
     subtaskDescription: subtask?.description ?? "",
@@ -52,9 +60,16 @@ function entryRow(db: WorkLogDatabase, e: WorkEntry) {
   };
 }
 
+/** Employees assigned to the filtered team, used for sheets without a task/team link (breaks, summary). */
+function teamEmployeeIds(db: WorkLogDatabase, filter: RangeFilter): Set<EmployeeId> | null {
+  if (!filter.teamId || filter.teamId === "all") return null;
+  return new Set(db.employeeTeams.filter((row) => row.teamId === filter.teamId).map((row) => row.employeeId));
+}
+
 /** Builds the six-sheet work log workbook. All figures come from the same stored data the UI reads. */
 export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFilter): Promise<ExcelJS.Workbook> {
   const entries = filterEntries(db, filter);
+  const teamMembers = teamEmployeeIds(db, filter);
   const workbook = new ExcelJS.Workbook();
   workbook.created = new Date();
 
@@ -62,34 +77,36 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const logSheet = workbook.addWorksheet("Work Log");
   styleSheet(
     logSheet,
-    ["Date", "Employee", "Start", "End", "Task", "Subtask", "Task description", "Subtask description", "Description", "Location", "Task status (current)", "Overtime (h)", "Reported overtime", "Evidence"],
-    [14, 20, 8, 8, 30, 24, 28, 24, 40, 12, 20, 13, 17, 30]
+    ["Date", "Employee", "Team", "Project", "Project description", "Subtask", "Work performed", "Start", "End", "Location", "Status", "Duration (h)", "Overtime (h)", "Reported overtime", "Evidence"],
+    [14, 20, 18, 30, 30, 24, 40, 8, 8, 12, 14, 12, 13, 17, 30]
   );
   const logEntries = [...entries].sort((a, b) =>
     a.employeeId === b.employeeId ? a.startAt.localeCompare(b.startAt) : a.employeeId.localeCompare(b.employeeId)
   );
   for (const e of logEntries) {
     const r = entryRow(db, e);
-    logSheet.addRow([r.date, r.employee, r.start, r.end, r.task, r.subtask, r.taskDescription, r.subtaskDescription, r.description, r.location, r.taskStatus, r.overtimeHours, r.reportedOvertime, r.evidence]);
+    logSheet.addRow([r.date, r.employee, r.team, r.project, r.projectDescription, r.subtask, r.description, r.start, r.end, r.location, r.taskStatus, r.durationHours, r.overtimeHours, r.reportedOvertime, r.evidence]);
   }
-  logSheet.getColumn(3).numFmt = "hh:mm";
-  logSheet.getColumn(4).numFmt = "hh:mm";
+  logSheet.getColumn(8).numFmt = "hh:mm";
+  logSheet.getColumn(9).numFmt = "hh:mm";
 
   // 2. Tasks
   const tasksSheet = workbook.addWorksheet("Tasks");
   styleSheet(
     tasksSheet,
-    ["Employee", "Task", "Description", "Current status", "Blocker reason", "Dropped reason", "Created", "Completed", "Management review", "Review note"],
-    [20, 32, 36, 16, 30, 30, 14, 14, 18, 30]
+    ["Employee", "Team", "Project / Task", "Description", "Current status", "Blocker reason", "Dropped reason", "Created", "Completed", "Management review", "Review note"],
+    [20, 18, 32, 36, 16, 30, 30, 14, 14, 18, 30]
   );
   const employeeName = (id: string) => db.employees.find((x) => x.id === id)?.name ?? id;
   const includedTaskIds = new Set(entries.map((entry) => entry.taskId));
   for (const t of db.tasks) {
     if (filter.employeeId && filter.employeeId !== "all" && t.employeeId !== filter.employeeId) continue;
+    if (filter.teamId && filter.teamId !== "all" && t.teamId !== filter.teamId) continue;
     if (filter.employeeId && filter.employeeId !== "all" && !includedTaskIds.has(t.id)) continue;
     tasksSheet.addRow([
       employeeName(t.employeeId),
-      t.title,
+      t.teamId ? (db.teams.find((team) => team.id === t.teamId)?.name ?? "") : "",
+      getTaskProjectName(db, t),
       t.description ?? "",
       TASK_STATUS_LABELS[t.currentStatus],
       t.blockerReason ?? "",
@@ -110,6 +127,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   );
   for (const emp of db.employees) {
     if (filter.employeeId && filter.employeeId !== "all" && filter.employeeId !== emp.id) continue;
+    if (teamMembers && !teamMembers.has(emp.id)) continue;
     const mine = entries.filter((e) => e.employeeId === emp.id);
     const total = mine.reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
     const normal = mine.reduce((s, e) => s + e.normalMinutes, 0);
@@ -144,6 +162,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
     const key = dateKeyOf(b.startAt);
     if (key < filter.fromKey || key > filter.toKey) continue;
     if (filter.employeeId && filter.employeeId !== "all" && b.employeeId !== filter.employeeId) continue;
+    if (teamMembers && !teamMembers.has(b.employeeId)) continue;
     breaksSheet.addRow([
       formatDateLabel(key),
       employeeName(b.employeeId),
@@ -158,10 +177,10 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
 
   // 5. Overtime
   const overtimeSheet = workbook.addWorksheet("Overtime");
-  styleSheet(overtimeSheet, ["Work entry ID", "Date", "Employee", "Task", "Start", "End", "Overtime (h)", "Reported manually"], [30, 14, 20, 30, 19, 19, 13, 18]);
+  styleSheet(overtimeSheet, ["Work entry ID", "Date", "Employee", "Project", "Start", "End", "Overtime (h)", "Reported manually"], [30, 14, 20, 30, 19, 19, 13, 18]);
   for (const e of entries.filter((x) => x.overtimeMinutes > 0)) {
     const r = entryRow(db, e);
-    overtimeSheet.addRow([e.id, r.date, r.employee, r.task, r.start, r.end, r.overtimeHours, r.reportedOvertime]);
+    overtimeSheet.addRow([e.id, r.date, r.employee, r.project, r.start, r.end, r.overtimeHours, r.reportedOvertime]);
   }
   overtimeSheet.getColumn(5).numFmt = "yyyy-mm-dd hh:mm";
   overtimeSheet.getColumn(6).numFmt = "yyyy-mm-dd hh:mm";
@@ -187,7 +206,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
 export async function downloadWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFilter, fileName: string): Promise<void> {
   const workbook = await buildWorkLogWorkbook(db, filter);
   const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const blob = new Blob([buffer], { type: XLSX_MIME_TYPE });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

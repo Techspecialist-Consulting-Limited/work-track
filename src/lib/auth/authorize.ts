@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { auth } from "./auth";
 import { db } from "@/lib/db";
-import { employees, invitations, memberships } from "@/lib/db/schema";
+import { employees, employeeTeams, invitations, memberships, teams } from "@/lib/db/schema";
 
 export type WorkTrackRole = "staff" | "hr" | "chairman";
 export type ManagementRole = "hr" | "chairman";
@@ -12,6 +12,10 @@ export interface WorkTrackMembership {
   membershipId: string;
   role: WorkTrackRole;
   employeeId: string | null;
+  /** Configuration permission, separate from management reporting access. */
+  isConfigAdmin: boolean;
+  /** Last team selected by a staff member (validated against employee_teams). */
+  activeTeamId: string | null;
   employee: {
     id: string;
     fullName: string;
@@ -38,6 +42,8 @@ export async function getMembership(): Promise<WorkTrackMembership | null> {
       membershipId: memberships.id,
       role: memberships.role,
       employeeId: memberships.employeeId,
+      isConfigAdmin: memberships.isConfigAdmin,
+      activeTeamId: memberships.activeTeamId,
       employee: {
         id: employees.id,
         fullName: employees.fullName,
@@ -67,6 +73,8 @@ export async function getMembership(): Promise<WorkTrackMembership | null> {
     membershipId: row.membershipId,
     role: row.role,
     employeeId: row.employeeId,
+    isConfigAdmin: row.isConfigAdmin,
+    activeTeamId: row.activeTeamId,
     employee: row.employeeId ? row.employee : null,
     user: { id: user.id ?? "", name: user.name, email: user.email },
   };
@@ -101,6 +109,48 @@ export async function requireManagement(): Promise<WorkTrackMembership> {
     throw new AuthzError(403, "Management access required.");
   }
   return membership;
+}
+
+/**
+ * Configuration permission is granted per membership and is deliberately
+ * separate from HR/chairman reporting access. Every config mutation re-checks
+ * this server-side.
+ */
+export async function requireConfigAdmin(): Promise<WorkTrackMembership> {
+  const membership = await requireMembership();
+  if (!membership.isConfigAdmin) {
+    throw new AuthzError(403, "Configuration admin access required.");
+  }
+  return membership;
+}
+
+/** Team ids the given employee is explicitly assigned to. */
+export async function getAuthorizedTeamIds(employeeId: string): Promise<string[]> {
+  const rows = await db
+    .select({ teamId: employeeTeams.teamId })
+    .from(employeeTeams)
+    .where(eq(employeeTeams.employeeId, employeeId));
+  return rows.map((row) => row.teamId);
+}
+
+/** True when the employee belongs to the team. */
+export async function isEmployeeInTeam(employeeId: string, teamId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: employeeTeams.id })
+    .from(employeeTeams)
+    .where(and(eq(employeeTeams.employeeId, employeeId), eq(employeeTeams.teamId, teamId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** The default team, used for auto-provisioned staff who have no department. */
+export async function getDefaultTeamId(): Promise<string | null> {
+  const rows = await db
+    .select({ id: teams.id })
+    .from(teams)
+    .where(and(eq(teams.isDefault, true), eq(teams.isActive, true)))
+    .limit(1);
+  return rows[0]?.id ?? null;
 }
 
 /**
@@ -142,6 +192,16 @@ export async function autoProvisionMembership(
   }
   if (!employeeId) return null;
 
+  // Auto-provisioned staff land in the default team so they can log work
+  // immediately; an admin reassigns them later.
+  const defaultTeamId = await getDefaultTeamId();
+  if (defaultTeamId) {
+    await db
+      .insert(employeeTeams)
+      .values({ employeeId, teamId: defaultTeamId })
+      .onConflictDoNothing();
+  }
+
   await db
     .insert(memberships)
     .values({
@@ -150,8 +210,24 @@ export async function autoProvisionMembership(
       microsoftObjectId: user.oid,
       employeeId,
       isActive: true,
+      activeTeamId: defaultTeamId,
     })
     .onConflictDoNothing();
+
+  // Existing membership without an active team (e.g. re-login) gets the default.
+  if (defaultTeamId) {
+    await db
+      .update(memberships)
+      .set({ activeTeamId: defaultTeamId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(memberships.microsoftTenantId, user.tid),
+          eq(memberships.microsoftObjectId, user.oid),
+          eq(memberships.role, role),
+          isNull(memberships.activeTeamId)
+        )
+      );
+  }
 
   return getMembership();
 }
@@ -231,6 +307,18 @@ export async function requirePageAccess(
   const membership = await getMembership();
   if (!membership) redirect("/auth/complete");
   if (!allowed.includes(membership.role)) {
+    redirect(membership.role === "staff" ? "/" : "/executive");
+  }
+  return membership;
+}
+
+/** Page-level guard for configuration screens (separate from reporting roles). */
+export async function requireConfigAdminPage(): Promise<WorkTrackMembership> {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+  const membership = await getMembership();
+  if (!membership) redirect("/auth/complete");
+  if (!membership.isConfigAdmin) {
     redirect(membership.role === "staff" ? "/" : "/executive");
   }
   return membership;

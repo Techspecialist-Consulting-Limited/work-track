@@ -31,6 +31,42 @@ export interface TaskCategory {
   name: string;
 }
 
+export interface Team {
+  id: string;
+  name: string;
+  description?: string;
+  isActive: boolean;
+  isDefault: boolean;
+  /** 'backfill' teams were auto-created from departments and need verification. */
+  origin: "admin" | "backfill";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmployeeTeam {
+  id: string;
+  employeeId: EmployeeId;
+  teamId: string;
+  createdAt: string;
+}
+
+export interface TeamProject {
+  id: string;
+  teamId: string;
+  name: string;
+  description?: string;
+  isActive: boolean;
+  /** 'staff' projects were added by staff from the work form. */
+  origin: "admin" | "staff";
+  createdByEmployeeId?: EmployeeId;
+  createdByName?: string;
+  promotedAt?: string;
+  promotedByName?: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Task {
   id: TaskId;
   employeeId: EmployeeId;
@@ -38,6 +74,8 @@ export interface Task {
   description?: string;
   categoryId?: string;
   categoryName?: string;
+  teamId?: string;
+  projectId?: string;
   currentStatus: TaskStatus;
   blockerReason?: string;
   droppedReason?: string;
@@ -157,8 +195,11 @@ export interface StatusHistoryEvent {
 }
 
 export interface WorkLogDatabase {
-  version: 1;
+  version: 2;
   employees: Employee[];
+  teams: Team[];
+  employeeTeams: EmployeeTeam[];
+  projects: TeamProject[];
   categories: TaskCategory[];
   tasks: Task[];
   subtasks: Subtask[];

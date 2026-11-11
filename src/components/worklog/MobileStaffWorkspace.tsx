@@ -9,10 +9,12 @@ import {
   Clock3,
   Coffee,
   House,
+  Info,
   ListChecks,
   Plus,
   Search,
   Square,
+  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -22,7 +24,6 @@ import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
-import { StatusBadge } from "./StatusBadge";
 import {
   MOBILE_BASE_INPUT_CLASS,
   MOBILE_INPUT_CLASS,
@@ -30,7 +31,8 @@ import {
 } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
-const CUSTOM_TIME_SLOT = "__custom_time";
+const OVERTIME_SLOT = "__overtime";
+const NEW_ACTIVITY = "__new_activity";
 
 const LOCATION_ICONS = {
   office: Building2,
@@ -38,10 +40,10 @@ const LOCATION_ICONS = {
 } satisfies Record<Exclude<WorkLocation, "other" | "unknown">, typeof Building2>;
 
 export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
-  const [taskSheetOpen, setTaskSheetOpen] = useState(false);
+  const [projectSheetOpen, setProjectSheetOpen] = useState(false);
   const [adjustSheetOpen, setAdjustSheetOpen] = useState(false);
   const [confirmBreak, setConfirmBreak] = useState(false);
-  const [sheetQuery, setSheetQuery] = useState("");
+  const [showProjectDetails, setShowProjectDetails] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
 
   useEffect(() => {
@@ -61,15 +63,10 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
     };
   }, []);
 
-  const filteredSheetTasks = c.openTasks.filter((task) =>
-    task.title.toLocaleLowerCase().includes(sheetQuery.trim().toLocaleLowerCase())
-  );
-
   const formDirty = Boolean(
     c.description.trim() ||
-      c.newTaskTitle.trim() ||
-      c.newTaskNote.trim() ||
-      c.newTaskSubtasks.some((title) => title.trim()) ||
+      c.newActivityTitle.trim() ||
+      c.newProjectName.trim() ||
       c.evidenceLink.trim() ||
       c.editingId
   );
@@ -87,15 +84,8 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
     c.handleStartBreak();
   }
 
-  function chooseTask(taskId: string) {
-    c.setTaskChoice(taskId);
-    c.setError(null);
-    setTaskSheetOpen(false);
-    setSheetQuery("");
-  }
-
   function handleTimeSelect(value: string) {
-    if (value === CUSTOM_TIME_SLOT) {
+    if (value === OVERTIME_SLOT) {
       openAdjustSheet();
       return;
     }
@@ -110,12 +100,36 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
     setAdjustSheetOpen(true);
   }
 
+  function handleActivityChange(value: string) {
+    if (value === NEW_ACTIVITY) {
+      c.setActivityChoice("");
+      c.setAddingActivity(true);
+      return;
+    }
+    c.setActivityChoice(value);
+    c.setAddingActivity(false);
+  }
+
   const breakElapsed = c.activeBreak
     ? formatMinutes(Math.max(0, Math.round((c.now.getTime() - new Date(c.activeBreak.startAt).getTime()) / 60_000)))
     : "";
 
-  const selectedTaskTitle = c.selectedTask?.title;
-  const canContinue = c.openTasks.length > 0 || Boolean(c.editingId);
+  const activityOptions = [
+    { value: "", label: "No specific activity", description: "Log against the project" },
+    ...c.projectSubtasks.map((subtask) => ({
+      value: subtask.id,
+      label: subtask.title,
+      description:
+        subtask.status === "done"
+          ? "Done"
+          : subtask.status === "dropped"
+            ? "Dropped"
+            : subtask.status === "blocked"
+              ? "Blocked"
+              : "Open",
+    })),
+    { value: NEW_ACTIVITY, label: "Add new activity…", description: "Create a subtask for this project" },
+  ];
 
   return (
     <div className="staff-workspace flex min-h-dvh flex-col bg-[#F7F7FC] text-[#17172F] lg:hidden">
@@ -203,7 +217,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               aria-hidden="true"
               className={`h-1.5 w-1.5 rounded-full ${c.workdayStatus === "Workday active" ? "bg-[#16A34A]" : "bg-[#A1A1B2]"}`}
             />
-            {c.workdayStatus === "Workday active" ? "Workday active" : c.workdayStatus}
+            {c.workdayStatus}
           </span>
         </div>
 
@@ -229,158 +243,119 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
           </section>
         ) : (
           <div className="space-y-4">
-            <section aria-labelledby="mobile-task-heading">
-              <h2 id="mobile-task-heading" className="mb-2 text-sm font-semibold text-[#17172F]">
-                What are you working on?
-              </h2>
-              <div className="mb-2 grid grid-cols-2 rounded-xl bg-[#ECEAF4] p-1" role="tablist" aria-label="Task mode">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={c.effectiveTaskMode === "continue"}
-                  disabled={!canContinue}
-                  onClick={() => c.selectTaskMode("continue")}
-                  className={`min-h-11 whitespace-nowrap rounded-lg px-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] disabled:opacity-45 ${
-                    c.effectiveTaskMode === "continue" ? "bg-white text-[#4E35C6] shadow-sm" : "text-[#6B6880]"
-                  }`}
-                >
-                  Continue task
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={c.effectiveTaskMode === "new"}
-                  onClick={() => c.selectTaskMode("new")}
-                  className={`min-h-11 whitespace-nowrap rounded-lg px-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
-                    c.effectiveTaskMode === "new" ? "bg-white text-[#4E35C6] shadow-sm" : "text-[#6B6880]"
-                  }`}
-                >
-                  New task
-                </button>
+            <section aria-labelledby="mobile-project-heading">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 id="mobile-project-heading" className="text-sm font-semibold text-[#17172F]">
+                  What are you working on?
+                </h2>
+                {c.teams.length > 1 ? (
+                  <span className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#E7E6F0] bg-white px-2 text-[11px] font-semibold text-[#53506B]">
+                    <Users size={13} className="text-[#8B7BE8]" aria-hidden="true" />
+                    {c.activeTeam?.name ?? "Team"}
+                  </span>
+                ) : c.activeTeam ? (
+                  <span className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#E7E6F0] bg-white px-2 text-[11px] font-semibold text-[#53506B]">
+                    <Users size={13} className="text-[#8B7BE8]" aria-hidden="true" />
+                    {c.activeTeam.name}
+                  </span>
+                ) : null}
               </div>
 
-              {c.effectiveTaskMode === "continue" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSheetQuery("");
-                      setTaskSheetOpen(true);
-                    }}
-                    className={`flex min-h-14 w-full items-center justify-between gap-2 rounded-xl border-2 px-3.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
-                      selectedTaskTitle
-                        ? "border-[#CFC8F3] bg-white hover:border-[#B8A8F8]"
-                        : "border-[#6C45F5]/40 bg-[#F5F1FF]/60 hover:border-[#6C45F5]"
-                    }`}
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-[#8B7BE8]">
-                        Current task
-                      </span>
-                      <span className={`block truncate text-[15px] font-bold ${selectedTaskTitle ? "text-[#17172F]" : "text-[#6C45F5]"}`}>
-                        {selectedTaskTitle ?? "Select a task"}
-                      </span>
-                      {selectedTaskTitle && c.selectedTask ? (
-                        <span className="mt-0.5 block">
-                          <StatusBadge status={c.selectedTask.currentStatus} />
-                        </span>
-                      ) : null}
-                    </span>
-                    <ChevronRight size={18} className="shrink-0 text-[#9A93C0]" aria-hidden="true" />
-                  </button>
-                  {c.selectedTaskSubtasks.length ? (
-                    <label className="mt-2 block text-[11px] font-semibold text-[#53506B]">
-                      Subtask (optional)
-                      <select
-                        value={c.subtaskChoice}
-                        onChange={(event) => c.setSubtaskChoice(event.target.value)}
-                        disabled={Boolean(c.editingId)}
-                        className={`${MOBILE_INPUT_CLASS} min-h-11`}
-                      >
-                        <option value="">No specific subtask</option>
-                        {c.selectedTaskSubtasks.map((subtask) => (
-                          <option key={subtask.id} value={subtask.id}>
-                            {subtask.title}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                </>
-              ) : (
-                <div className="space-y-2">
-                  <label className="block text-[11px] font-semibold text-[#53506B]">
-                    Task title
-                    <input
-                      value={c.newTaskTitle}
-                      maxLength={WORKLOG_RULES.taskTitleMaxLength}
-                      onChange={(event) => c.setNewTaskTitle(event.target.value)}
-                      placeholder="Give this task a clear name"
-                      className={`${MOBILE_INPUT_CLASS} min-h-12`}
-                    />
-                  </label>
-                  <label className="block text-[11px] font-semibold text-[#53506B]">
-                    Category (optional)
-                    <select
-                      value={c.newTaskCategory}
-                      onChange={(event) => c.setNewTaskCategory(event.target.value)}
-                      className={`${MOBILE_INPUT_CLASS} min-h-11`}
-                    >
-                      <option value="">No category</option>
-                      {c.categories.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {c.newTaskSubtasks.map((subtask, index) => (
-                    <div key={index} className="flex items-end gap-2">
-                      <label className="block flex-1 text-[11px] font-semibold text-[#53506B]">
-                        Subtask {index + 1}
-                        <input
-                          value={subtask}
-                          maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
-                          onChange={(event) => c.updateNewTaskSubtask(index, event.target.value)}
-                          placeholder="A smaller piece of this task"
-                          className={`${MOBILE_INPUT_CLASS} min-h-11`}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => c.removeNewTaskSubtask(index)}
-                        aria-label={`Remove subtask ${index + 1}`}
-                        className="mb-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-[#E7E6F0] text-[#777A91]"
-                      >
-                        <X size={15} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={c.addNewTaskSubtask}
-                    className="inline-flex min-h-9 items-center gap-1 text-xs font-semibold text-[#6C45F5]"
-                  >
-                    <Plus size={13} aria-hidden="true" /> Add subtask
-                  </button>
-                  <label className="block text-[11px] font-semibold text-[#53506B]">
-                    Initial progress note (optional)
-                    <textarea
-                      value={c.newTaskNote}
-                      onChange={(event) => c.setNewTaskNote(event.target.value)}
-                      rows={2}
-                      maxLength={WORKLOG_RULES.progressUpdateMaxLength}
-                      placeholder="Where are you starting from?"
-                      className={`${MOBILE_INPUT_CLASS} min-h-[64px] resize-y`}
-                    />
-                  </label>
+              {c.teams.length > 1 ? (
+                <div className="mb-2">
+                  <WorkTrackSelect
+                    label="Team"
+                    value={c.activeTeamId}
+                    onChange={c.chooseTeam}
+                    options={c.teams.map((team) => ({
+                      value: team.id,
+                      label: team.name,
+                      description: team.isDefault ? "Default team" : undefined,
+                    }))}
+                    placeholder="Select a team"
+                    leadingIcon={<Users size={14} className="text-[#8B7BE8]" />}
+                  />
                 </div>
-              )}
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => {
+                  c.setProjectSearch("");
+                  c.setShowAddProject(false);
+                  c.setProjectError(null);
+                  c.setDuplicateProject(null);
+                  setProjectSheetOpen(true);
+                }}
+                className={`flex min-h-14 w-full items-center justify-between gap-2 rounded-xl border-2 px-3.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
+                  c.selectedProject
+                    ? "border-[#CFC8F3] bg-white hover:border-[#B8A8F8]"
+                    : "border-[#6C45F5]/40 bg-[#F5F1FF]/60 hover:border-[#6C45F5]"
+                }`}
+              >
+                <span className="min-w-0">
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-[#8B7BE8]">
+                    Project / Main Task
+                  </span>
+                  <span className={`block truncate text-[15px] font-bold ${c.selectedProject ? "text-[#17172F]" : "text-[#6C45F5]"}`}>
+                    {c.selectedProject?.name ?? "Select a project"}
+                  </span>
+                </span>
+                <ChevronRight size={18} className="shrink-0 text-[#9A93C0]" aria-hidden="true" />
+              </button>
+
+              {c.selectedProject?.description ? (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowProjectDetails((value) => !value)}
+                    aria-expanded={showProjectDetails}
+                    className="inline-flex min-h-8 items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold text-[#6C45F5] hover:bg-[#F5F1FF]"
+                  >
+                    <Info size={13} aria-hidden="true" />
+                    {showProjectDetails ? "Hide project details" : "Project details"}
+                  </button>
+                  {showProjectDetails ? (
+                    <div className="mt-1 rounded-xl border border-[#EEEAF8] bg-white p-3 text-xs leading-5 text-[#777A91]">
+                      {c.selectedProject.description}
+                      {c.selectedProject.origin === "staff" ? (
+                        <p className="mt-1 text-[10px] font-medium text-[#8B7BE8]">
+                          Added by {c.selectedProject.createdByName ?? "staff"}
+                          {c.selectedProject.promotedAt ? " · approved by admin" : " · pending admin review"}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="mt-3">
+                <label className="mb-1 block text-[11px] font-semibold text-[#53506B]">Activity / Subtask</label>
+                <WorkTrackSelect
+                  label="Activity or subtask"
+                  value={c.addingActivity ? NEW_ACTIVITY : c.activityChoice}
+                  onChange={handleActivityChange}
+                  options={activityOptions}
+                  placeholder={c.selectedProject ? "Select an activity" : "Choose a project first"}
+                  disabled={!c.selectedProject}
+                />
+                {c.addingActivity ? (
+                  <input
+                    value={c.newActivityTitle}
+                    maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                    onChange={(event) => c.setNewActivityTitle(event.target.value)}
+                    placeholder="Name the new activity"
+                    aria-label="New activity name"
+                    autoFocus
+                    className={`${MOBILE_INPUT_CLASS} min-h-11`}
+                  />
+                ) : null}
+              </div>
             </section>
 
             <section aria-labelledby="mobile-desc-heading">
               <label htmlFor="mobile-description" className="mb-1.5 block text-sm font-semibold text-[#17172F]">
-                What did you work on?
+                What did you work on during this time?
               </label>
               <textarea
                 id="mobile-description"
@@ -388,9 +363,12 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                 onChange={(event) => c.setDescription(event.target.value)}
                 rows={3}
                 maxLength={WORKLOG_RULES.descriptionMaxLength}
-                placeholder="Briefly describe what you worked on…"
-                className={`${MOBILE_INPUT_CLASS} min-h-[84px] resize-y`}
+                placeholder="Describe the work you completed in this period…"
+                className={`${MOBILE_INPUT_CLASS} min-h-[88px] resize-y`}
               />
+              <span className="mt-1 block text-right text-[10px] text-[#9A97AD]">
+                {c.description.length}/{WORKLOG_RULES.descriptionMaxLength}
+              </span>
             </section>
 
             <section aria-labelledby="mobile-time-heading">
@@ -404,7 +382,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                   className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-[#6C45F5] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
                 >
                   <Clock3 size={14} aria-hidden="true" />
-                  Adjust time / overtime
+                  Log overtime
                 </button>
               </div>
 
@@ -412,7 +390,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                 <span className="mb-1 block">Time slot</span>
                 <WorkTrackSelect
                   label="Time slot"
-                  value={c.selectedSlot || (c.showTimeAdjustment ? CUSTOM_TIME_SLOT : "")}
+                  value={c.selectedSlot || (c.showTimeAdjustment ? OVERTIME_SLOT : "")}
                   onChange={handleTimeSelect}
                   options={[
                     ...c.slots.map((slot) => ({
@@ -428,8 +406,8 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                       disabled: !slot.available,
                     })),
                     {
-                      value: CUSTOM_TIME_SLOT,
-                      label: "Custom time / overtime",
+                      value: OVERTIME_SLOT,
+                      label: "Overtime",
                       description: "Set start and end manually",
                     },
                   ]}
@@ -439,13 +417,13 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               </div>
               {!c.slots.length ? (
                 <p className="mt-2 text-[11px] leading-5 text-[#8B8B9A]">
-                  No standard hourly slots today — choose Custom time to log work outside 9:00–17:00 or on a weekend.
+                  No standard hourly slots today — log overtime to record work outside 9:00–17:00 or on a weekend.
                 </p>
               ) : null}
 
               {c.showTimeAdjustment && !c.selectedSlot ? (
                 <p className="mt-2 rounded-lg bg-[#F1F0F6] px-3 py-2 text-[11px] font-medium text-[#6B6880]">
-                  Custom time: {c.startTime} – {c.endTime}
+                  Overtime: {c.startTime} – {c.endTime}
                   {c.isReportedOvertime ? " · reported as overtime" : ""}
                 </p>
               ) : null}
@@ -616,68 +594,144 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
       ) : null}
 
       <MobileSheet
-        open={taskSheetOpen}
+        open={projectSheetOpen}
         onClose={() => {
-          setTaskSheetOpen(false);
-          setSheetQuery("");
+          setProjectSheetOpen(false);
+          c.setShowAddProject(false);
+          c.setProjectError(null);
+          c.setDuplicateProject(null);
         }}
-        title="Choose a task"
+        title="Choose a project"
       >
         <label className="relative mb-2 block">
           <Search size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9A93C0]" />
           <input
             autoFocus
-            value={sheetQuery}
-            onChange={(event) => setSheetQuery(event.target.value)}
-            placeholder="Search tasks…"
-            aria-label="Search tasks"
+            value={c.projectSearch}
+            onChange={(event) => c.setProjectSearch(event.target.value)}
+            placeholder="Search projects…"
+            aria-label="Search projects"
             className={`${MOBILE_BASE_INPUT_CLASS} min-h-11 pl-9`}
           />
         </label>
         <div className="space-y-1.5">
-          {filteredSheetTasks.map((task) => {
-            const selected = c.taskChoice === task.id;
+          {c.filteredProjects.map((project) => {
+            const selected = c.projectChoice === project.id;
             return (
               <button
-                key={task.id}
+                key={project.id}
                 type="button"
-                onClick={() => chooseTask(task.id)}
+                onClick={() => {
+                  c.chooseProject(project.id);
+                  setProjectSheetOpen(false);
+                }}
                 aria-pressed={selected}
                 className={`flex min-h-12 w-full items-center justify-between gap-3 rounded-xl border px-3.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
                   selected ? "border-[#6C45F5] bg-[#F5F1FF]" : "border-[#E7E6F0] bg-white"
                 }`}
               >
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-[#17172F]">{task.title}</span>
-                  <span className="mt-0.5 block">
-                    <StatusBadge status={task.currentStatus} />
+                  <span className="block truncate text-sm font-semibold text-[#17172F]">{project.name}</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-[#8B8B9A]">
+                    {project.origin === "staff"
+                      ? project.promotedAt
+                        ? "Staff-added · approved"
+                        : "Staff-added · pending review"
+                      : project.description ?? "Team project"}
                   </span>
                 </span>
                 {selected ? <Check size={18} className="shrink-0 text-[#6C45F5]" aria-hidden="true" /> : null}
               </button>
             );
           })}
-          {filteredSheetTasks.length === 0 ? (
+          {c.filteredProjects.length === 0 ? (
             <p className="rounded-xl bg-[#F7F7FC] px-4 py-5 text-center text-sm text-[#777A91]">
-              No matching tasks. Start a new one below.
+              No matching projects. Add the missing one below.
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            c.selectTaskMode("new");
-            setTaskSheetOpen(false);
-            setSheetQuery("");
-          }}
-          className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#CFC8F3] text-sm font-semibold text-[#5A3ED0]"
-        >
-          <Plus size={16} aria-hidden="true" />
-          Start a new task
-        </button>
+
+        {c.showAddProject ? (
+          <div className="mt-3 rounded-xl border border-[#CFC8F3] bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-[#39364F]">Add a project to {c.activeTeam?.name ?? "your team"}</h3>
+              <button
+                type="button"
+                onClick={() => c.setShowAddProject(false)}
+                aria-label="Close add project"
+                className="grid h-8 w-8 place-items-center rounded-lg text-[#777A91] hover:bg-[#F7F7FC]"
+              >
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+            <label className="mt-2 block text-[11px] font-semibold text-[#53506B]">
+              Project name
+              <input
+                value={c.newProjectName}
+                maxLength={WORKLOG_RULES.taskTitleMaxLength}
+                onChange={(event) => c.setNewProjectName(event.target.value)}
+                placeholder="e.g. Q4 onboarding revamp"
+                className={`${MOBILE_INPUT_CLASS} min-h-11`}
+              />
+            </label>
+            <label className="mt-2 block text-[11px] font-semibold text-[#53506B]">
+              Description (optional)
+              <textarea
+                value={c.newProjectDescription}
+                maxLength={WORKLOG_RULES.descriptionMaxLength}
+                onChange={(event) => c.setNewProjectDescription(event.target.value)}
+                rows={2}
+                placeholder="What is this project about?"
+                className={`${MOBILE_INPUT_CLASS} resize-y`}
+              />
+            </label>
+            {c.projectError ? (
+              <p role="alert" className="mt-2 rounded-lg bg-[#FDEEEE] px-2 py-1.5 text-[11px] text-[#B43A3A]">
+                {c.projectError}
+              </p>
+            ) : null}
+            {c.duplicateProject ? (
+              <div className="mt-2 rounded-lg border border-[#F6D99A] bg-[#FFF6E5] p-2 text-[11px] text-[#9A6200]">
+                <p>A project called “{c.duplicateProject.name}” already exists for this team.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    c.useExistingProject();
+                    setProjectSheetOpen(false);
+                  }}
+                  className="mt-1 inline-flex min-h-8 items-center rounded-lg bg-[#F59E0B] px-2.5 text-[11px] font-semibold text-white hover:bg-[#DB8A08]"
+                >
+                  Use existing project
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={c.addProject}
+              disabled={c.addingProject}
+              className="mt-2 inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-[#6C45F5] text-sm font-semibold text-white disabled:opacity-50"
+            >
+              <Plus size={15} aria-hidden="true" />
+              {c.addingProject ? "Adding…" : "Add project"}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              c.setShowAddProject(true);
+              c.setProjectError(null);
+              c.setDuplicateProject(null);
+            }}
+            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#CFC8F3] text-sm font-semibold text-[#5A3ED0]"
+          >
+            <Plus size={16} aria-hidden="true" />
+            Add missing project
+          </button>
+        )}
       </MobileSheet>
 
-      <MobileSheet open={adjustSheetOpen} onClose={() => setAdjustSheetOpen(false)} title="Adjust time / overtime">
+      <MobileSheet open={adjustSheetOpen} onClose={() => setAdjustSheetOpen(false)} title="Log overtime">
         <div className="grid grid-cols-2 gap-2">
           <label className="block text-[11px] font-semibold text-[#53506B]">
             Start time
