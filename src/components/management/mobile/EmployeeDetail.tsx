@@ -83,7 +83,7 @@ function ActivityEntryCard({
         <ActivityStatusBadge status={status} />
         <span className="text-[10px] text-[#9292A8]">{activityLocationLabel(entry.workLocation)}</span>
       </div>
-      <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-[#666783]">{entry.description}</p>
+      <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-[#666783]">{entry.description.trim() || "—"}</p>
       {entry.evidenceLink ? (
         <a
           href={entry.evidenceLink}

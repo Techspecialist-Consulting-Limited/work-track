@@ -793,7 +793,7 @@ function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDa
               {sub ? sub.title : "—"}
             </td>
             <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
-              <span className="whitespace-pre-wrap break-words">{entry.description}</span>
+              <span className="whitespace-pre-wrap break-words">{entry.description.trim() || "—"}</span>
               {entry.evidenceLink ? (
                 <a
                   href={entry.evidenceLink}

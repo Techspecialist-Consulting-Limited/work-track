@@ -80,7 +80,9 @@ test("progress updates are required and length-limited", () => {
 });
 
 test("existing entry validators still apply", () => {
-  assert.equal(validateDescription("").ok, false);
+  assert.equal(validateDescription("").ok, true);
+  assert.equal(validateDescription("   ").ok, true);
+  assert.equal(validateDescription("x".repeat(501)).ok, false);
   assert.equal(validateDescription("Reviewed the change.").ok, true);
   assert.equal(validateEvidenceLink("https://example.com/proof").ok, true);
   assert.equal(validateEvidenceLink("javascript:alert(1)").ok, false);

@@ -21,7 +21,7 @@ import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
-import { BASE_INPUT_CLASS, INPUT_CLASS, SCHEDULED_MINUTES } from "./shared";
+import { BASE_INPUT_CLASS, INPUT_CLASS, NEW_PROJECT_OPTION, SCHEDULED_MINUTES } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
 const LOCATION_ICONS = {
@@ -30,7 +30,6 @@ const LOCATION_ICONS = {
 } satisfies Record<Exclude<WorkLocation, "other" | "unknown">, typeof Building2>;
 
 const OVERTIME_SLOT = "__overtime";
-const NEW_ACTIVITY = "__new_activity";
 
 export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
   const {
@@ -46,15 +45,14 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     projectSearch,
     setProjectSearch,
     projectChoice,
-    chooseProject,
     selectedProject,
     projectSubtasks,
     activityChoice,
     setActivityChoice,
-    newActivityTitle,
-    setNewActivityTitle,
-    addingActivity,
-    setAddingActivity,
+    newSubtaskTitle,
+    setNewSubtaskTitle,
+    addProjectSubtask,
+    handleProjectSelect,
     showProjectInfo,
     setShowProjectInfo,
     showAddProject,
@@ -141,6 +139,10 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     if (slot) selectSlot(slot);
   };
 
+  const projectSearchTrimmed = projectSearch.trim();
+  const projectSearchExact = filteredProjects.some(
+    (project) => project.name.toLocaleLowerCase() === projectSearchTrimmed.toLocaleLowerCase()
+  );
   const projectOptions = [
     { value: "", label: "Select a project", description: "Choose the project or main task" },
     ...filteredProjects.map((project) => ({
@@ -153,6 +155,15 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
             : "Staff-added · pending review"
           : project.description,
     })),
+    ...(projectSearchTrimmed.length >= 2 && !projectSearchExact
+      ? [
+          {
+            value: NEW_PROJECT_OPTION,
+            label: `Add “${projectSearchTrimmed}” as a project`,
+            description: "Not in the list — create it for your team",
+          },
+        ]
+      : []),
   ];
 
   const activityOptions = [
@@ -169,18 +180,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               ? "Blocked"
               : "Open",
     })),
-    { value: NEW_ACTIVITY, label: "Add new activity…", description: "Create a subtask for this project" },
   ];
-
-  const handleActivityChange = (value: string) => {
-    if (value === NEW_ACTIVITY) {
-      setActivityChoice("");
-      setAddingActivity(true);
-      return;
-    }
-    setActivityChoice(value);
-    setAddingActivity(false);
-  };
 
   const descriptionCount = description.length;
 
@@ -381,7 +381,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                           <WorkTrackSelect
                             label="Choose a project"
                             value={projectChoice}
-                            onChange={chooseProject}
+                            onChange={handleProjectSelect}
                             options={projectOptions}
                             placeholder="Select a project"
                             disabled={Boolean(editingId) || !activeTeamId}
@@ -493,28 +493,75 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                     <div className="mt-1">
                       <WorkTrackSelect
                         label="Activity or subtask"
-                        value={addingActivity ? NEW_ACTIVITY : activityChoice}
-                        onChange={handleActivityChange}
+                        value={activityChoice}
+                        onChange={setActivityChoice}
                         options={activityOptions}
                         placeholder={selectedProject ? "Select an activity" : "Choose a project first"}
                         disabled={!selectedProject}
                       />
                     </div>
-                    {addingActivity ? (
-                      <input
-                        value={newActivityTitle}
-                        maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
-                        onChange={(event) => setNewActivityTitle(event.target.value)}
-                        placeholder="Name the new activity"
-                        aria-label="New activity name"
-                        className={`${INPUT_CLASS} min-h-10`}
-                        autoFocus
-                      />
+                    {selectedProject ? (
+                      <div className="mt-2 rounded-lg border border-[#EEEAF2] bg-white p-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-[#53506B]">
+                            Subtasks for this project
+                          </span>
+                          {projectSubtasks.length ? (
+                            <span className="text-[10px] font-medium text-[#9A97AD]">
+                              {projectSubtasks.length} {projectSubtasks.length === 1 ? "subtask" : "subtasks"}
+                            </span>
+                          ) : null}
+                        </div>
+                        {projectSubtasks.length ? (
+                          <ul className="mt-1.5 space-y-1">
+                            {projectSubtasks.map((subtask) => (
+                              <li
+                                key={subtask.id}
+                                className="flex items-center justify-between gap-2 text-xs text-[#39364F]"
+                              >
+                                <span className="min-w-0 truncate">{subtask.title}</span>
+                                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-[#9A97AD]">
+                                  {subtask.status}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-1.5 text-[11px] leading-4 text-[#9A97AD]">
+                            No subtasks yet — add the pieces of work you will do under this project.
+                          </p>
+                        )}
+                        <div className="mt-2 flex gap-1.5">
+                          <input
+                            value={newSubtaskTitle}
+                            maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                            onChange={(event) => setNewSubtaskTitle(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addProjectSubtask();
+                              }
+                            }}
+                            placeholder="New subtask name"
+                            aria-label="New subtask name"
+                            className={`${BASE_INPUT_CLASS} min-h-9 flex-1 text-xs`}
+                          />
+                          <button
+                            type="button"
+                            onClick={addProjectSubtask}
+                            className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-[#CFC8F3] bg-[#F5F1FF] px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#EEE7FD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                          >
+                            <Plus size={12} aria-hidden="true" />
+                            Add
+                          </button>
+                        </div>
+                      </div>
                     ) : null}
                   </div>
 
                   <label className="block text-xs font-semibold text-[#53506B]">
-                    What did you work on during this time?
+                    What did you work on during this time?{" "}
+                    <span className="font-normal text-[#9A97AD]">(optional)</span>
                     <textarea
                       value={description}
                       onChange={(event) => setDescription(event.target.value)}

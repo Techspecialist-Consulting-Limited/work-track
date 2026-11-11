@@ -44,6 +44,7 @@ import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib
 import {
   getTaskStatusCounts,
   makeWorkSlots,
+  NEW_PROJECT_OPTION,
   SCHEDULED_MINUTES,
   slotEndInstant,
   toLagosIso,
@@ -52,7 +53,6 @@ import {
 const subscribeNoop = () => () => {};
 const getClientMounted = () => true;
 const getServerMounted = () => false;
-
 /** Open tasks that still have at least one active work entry. */
 function openTasksWithEntries(db: WorkLogDatabase, employeeId: string) {
   const ids = new Set(db.entries.map((entry) => entry.taskId));
@@ -68,8 +68,7 @@ export function useWorkLogController() {
   const [projectChoice, setProjectChoice] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [activityChoice, setActivityChoice] = useState("");
-  const [newActivityTitle, setNewActivityTitle] = useState("");
-  const [addingActivity, setAddingActivity] = useState(false);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [showProjectInfo, setShowProjectInfo] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -214,8 +213,7 @@ export function useWorkLogController() {
     setProjectChoice("");
     setProjectSearch("");
     setActivityChoice("");
-    setNewActivityTitle("");
-    setAddingActivity(false);
+    setNewSubtaskTitle("");
     setShowProjectInfo(false);
     setShowAddProject(false);
     setNewProjectName("");
@@ -244,8 +242,7 @@ export function useWorkLogController() {
     setProjectChoice(task?.projectId ?? "");
     setProjectSearch("");
     setActivityChoice(entry.subtaskId ?? "");
-    setNewActivityTitle("");
-    setAddingActivity(false);
+    setNewSubtaskTitle("");
     setDescription(entry.description);
     setStartTime(formatTime(entry.startAt));
     setEndTime(formatTime(entry.endAt));
@@ -266,8 +263,7 @@ export function useWorkLogController() {
     setProjectChoice("");
     setProjectSearch("");
     setActivityChoice("");
-    setNewActivityTitle("");
-    setAddingActivity(false);
+    setNewSubtaskTitle("");
     setShowAddProject(false);
     setProjectError(null);
     setDuplicateProject(null);
@@ -278,10 +274,58 @@ export function useWorkLogController() {
   function chooseProject(projectId: string) {
     setProjectChoice(projectId);
     setActivityChoice("");
-    setNewActivityTitle("");
-    setAddingActivity(false);
+    setNewSubtaskTitle("");
     setShowProjectInfo(false);
     setError(null);
+  }
+
+  function handleProjectSelect(value: string) {
+    if (value === NEW_PROJECT_OPTION) {
+      const name = projectSearch.trim();
+      if (name.length >= 2) setNewProjectName(name);
+      setShowAddProject(true);
+      setProjectError(null);
+      setDuplicateProject(null);
+      return;
+    }
+    chooseProject(value);
+  }
+
+  function addProjectSubtask(): MutationResult {
+    setError(null);
+    const title = newSubtaskTitle.trim();
+    if (!title) {
+      const result = { ok: false as const, message: "Enter a subtask name." };
+      setError(result.message);
+      return result;
+    }
+    if (!selectedProject || !activeTeamId) {
+      const result = { ok: false as const, message: "Choose a project before adding a subtask." };
+      setError(result.message);
+      return result;
+    }
+    let taskId = projectTask?.id ?? "";
+    if (!taskId) {
+      const created = createTask({ employeeId: meId, teamId: activeTeamId, projectId: selectedProject.id });
+      if (!created.ok) {
+        setError(created.message);
+        return created;
+      }
+      taskId = created.taskId;
+    }
+    const result = createSubtask({ taskId, title });
+    if (!result.ok) {
+      setError(result.message);
+      return result;
+    }
+    const createdSubtask = getDatabaseSnapshot()
+      .subtasks.filter((subtask) => subtask.taskId === taskId)
+      .filter((subtask) => subtask.title.toLocaleLowerCase() === title.toLocaleLowerCase())
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (createdSubtask) setActivityChoice(createdSubtask.id);
+    setNewSubtaskTitle("");
+    setNotice("Subtask added.");
+    return result;
   }
 
   async function addProject() {
@@ -380,11 +424,6 @@ export function useWorkLogController() {
       setError("Choose a project, or add the missing project to your team's library.");
       return;
     }
-    if (addingActivity && !newActivityTitle.trim()) {
-      setError("Enter the activity name or clear the new activity field.");
-      return;
-    }
-
     let taskId = editingId ? getTaskById(getDatabaseSnapshot(), db.entries.find((e) => e.id === editingId)?.taskId ?? "")?.id ?? "" : "";
     if (!taskId && selectedProject) {
       const created = createTask({
@@ -403,18 +442,7 @@ export function useWorkLogController() {
       return;
     }
 
-    let subtaskId = activityChoice || undefined;
-    if (addingActivity && newActivityTitle.trim()) {
-      const added = createSubtask({ taskId, title: newActivityTitle.trim() });
-      if (!added.ok) {
-        setError(added.message);
-        return;
-      }
-      const createdSubtask = getDatabaseSnapshot()
-        .subtasks.filter((subtask) => subtask.taskId === taskId)
-        .find((subtask) => subtask.title.toLocaleLowerCase() === newActivityTitle.trim().toLocaleLowerCase());
-      subtaskId = createdSubtask?.id;
-    }
+    const subtaskId = activityChoice || undefined;
 
     const input: EntryInput = {
       employeeId: meId,
@@ -645,10 +673,10 @@ export function useWorkLogController() {
     projectSubtasks,
     activityChoice,
     setActivityChoice,
-    newActivityTitle,
-    setNewActivityTitle,
-    addingActivity,
-    setAddingActivity,
+    newSubtaskTitle,
+    setNewSubtaskTitle,
+    addProjectSubtask,
+    handleProjectSelect,
     showProjectInfo,
     setShowProjectInfo,
     showAddProject,

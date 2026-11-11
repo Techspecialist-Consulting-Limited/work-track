@@ -32,7 +32,6 @@ import {
 import type { WorkLogController } from "./useWorkLogController";
 
 const OVERTIME_SLOT = "__overtime";
-const NEW_ACTIVITY = "__new_activity";
 
 const LOCATION_ICONS = {
   office: Building2,
@@ -65,7 +64,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
 
   const formDirty = Boolean(
     c.description.trim() ||
-      c.newActivityTitle.trim() ||
+      c.newSubtaskTitle.trim() ||
       c.newProjectName.trim() ||
       c.evidenceLink.trim() ||
       c.editingId
@@ -100,19 +99,15 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
     setAdjustSheetOpen(true);
   }
 
-  function handleActivityChange(value: string) {
-    if (value === NEW_ACTIVITY) {
-      c.setActivityChoice("");
-      c.setAddingActivity(true);
-      return;
-    }
-    c.setActivityChoice(value);
-    c.setAddingActivity(false);
-  }
-
   const breakElapsed = c.activeBreak
     ? formatMinutes(Math.max(0, Math.round((c.now.getTime() - new Date(c.activeBreak.startAt).getTime()) / 60_000)))
     : "";
+
+  const projectSearchTrimmed = c.projectSearch.trim();
+  const projectSearchExact = c.filteredProjects.some(
+    (project) => project.name.toLocaleLowerCase() === projectSearchTrimmed.toLocaleLowerCase()
+  );
+  const canAddSearchedProject = projectSearchTrimmed.length >= 2 && !projectSearchExact;
 
   const activityOptions = [
     { value: "", label: "No specific activity", description: "Log against the project" },
@@ -128,7 +123,6 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               ? "Blocked"
               : "Open",
     })),
-    { value: NEW_ACTIVITY, label: "Add new activity…", description: "Create a subtask for this project" },
   ];
 
   return (
@@ -333,29 +327,76 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                 <label className="mb-1 block text-[11px] font-semibold text-[#53506B]">Activity / Subtask</label>
                 <WorkTrackSelect
                   label="Activity or subtask"
-                  value={c.addingActivity ? NEW_ACTIVITY : c.activityChoice}
-                  onChange={handleActivityChange}
+                  value={c.activityChoice}
+                  onChange={c.setActivityChoice}
                   options={activityOptions}
                   placeholder={c.selectedProject ? "Select an activity" : "Choose a project first"}
                   disabled={!c.selectedProject}
                 />
-                {c.addingActivity ? (
-                  <input
-                    value={c.newActivityTitle}
-                    maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
-                    onChange={(event) => c.setNewActivityTitle(event.target.value)}
-                    placeholder="Name the new activity"
-                    aria-label="New activity name"
-                    autoFocus
-                    className={`${MOBILE_INPUT_CLASS} min-h-11`}
-                  />
+                {c.selectedProject ? (
+                  <div className="mt-2 rounded-xl border border-[#EEEAF2] bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-[#53506B]">
+                        Subtasks for this project
+                      </span>
+                      {c.projectSubtasks.length ? (
+                        <span className="text-[10px] font-medium text-[#9A97AD]">
+                          {c.projectSubtasks.length}
+                        </span>
+                      ) : null}
+                    </div>
+                    {c.projectSubtasks.length ? (
+                      <ul className="mt-1.5 space-y-1">
+                        {c.projectSubtasks.map((subtask) => (
+                          <li
+                            key={subtask.id}
+                            className="flex items-center justify-between gap-2 text-xs text-[#39364F]"
+                          >
+                            <span className="min-w-0 truncate">{subtask.title}</span>
+                            <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-[#9A97AD]">
+                              {subtask.status}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1.5 text-[11px] leading-4 text-[#9A97AD]">
+                        No subtasks yet — add the pieces of work under this project.
+                      </p>
+                    )}
+                    <div className="mt-2 flex gap-1.5">
+                      <input
+                        value={c.newSubtaskTitle}
+                        maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                        onChange={(event) => c.setNewSubtaskTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            c.addProjectSubtask();
+                          }
+                        }}
+                        placeholder="New subtask name"
+                        aria-label="New subtask name"
+                        className={`${MOBILE_BASE_INPUT_CLASS} min-h-10 flex-1 text-sm`}
+                      />
+                      <button
+                        type="button"
+                        onClick={c.addProjectSubtask}
+                        className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg border border-[#CFC8F3] bg-[#F5F1FF] px-3 text-xs font-semibold text-[#5A3ED0] transition hover:bg-[#EEE7FD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                      >
+                        <Plus size={13} aria-hidden="true" />
+                        Add
+                      </button>
+                    </div>
+                  </div>
                 ) : null}
               </div>
             </section>
 
             <section aria-labelledby="mobile-desc-heading">
               <label htmlFor="mobile-description" className="mb-1.5 block text-sm font-semibold text-[#17172F]">
-                What did you work on during this time?
+                What did you work on during this time?{" "}
+                <span className="text-[11px] font-normal text-[#9A97AD]">(optional)</span>
               </label>
               <textarea
                 id="mobile-description"
@@ -651,6 +692,22 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
           ) : null}
         </div>
 
+        {canAddSearchedProject && !c.showAddProject ? (
+          <button
+            type="button"
+            onClick={() => {
+              c.setNewProjectName(projectSearchTrimmed);
+              c.setShowAddProject(true);
+              c.setProjectError(null);
+              c.setDuplicateProject(null);
+            }}
+            className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#CFC8F3] bg-[#F5F1FF] text-sm font-semibold text-[#5A3ED0]"
+          >
+            <Plus size={15} aria-hidden="true" />
+            Add “{projectSearchTrimmed}” as a project
+          </button>
+        ) : null}
+
         {c.showAddProject ? (
           <div className="mt-3 rounded-xl border border-[#CFC8F3] bg-white p-3">
             <div className="flex items-center justify-between gap-2">
@@ -719,6 +776,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
           <button
             type="button"
             onClick={() => {
+              if (canAddSearchedProject) c.setNewProjectName(projectSearchTrimmed);
               c.setShowAddProject(true);
               c.setProjectError(null);
               c.setDuplicateProject(null);
