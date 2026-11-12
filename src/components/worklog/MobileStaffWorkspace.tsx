@@ -690,23 +690,31 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               No matching projects. Add the missing one below.
             </p>
           ) : null}
+          {!c.showAddProject ? (
+            <button
+              type="button"
+              onClick={() => {
+                c.setNewProjectName(canAddSearchedProject ? projectSearchTrimmed : "");
+                c.setShowAddProject(true);
+                c.setProjectError(null);
+                c.setDuplicateProject(null);
+              }}
+              className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-dashed border-[#CFC8F3] bg-[#F5F1FF]/60 px-3.5 text-left transition hover:border-[#B8A8F8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+            >
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#6C45F5]/10 text-[#5A3ED0]">
+                <Plus size={15} aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-[#5A3ED0]">
+                  {canAddSearchedProject ? `Add “${projectSearchTrimmed}”` : "Add project / task"}
+                </span>
+                <span className="block truncate text-[11px] text-[#8B8B9A]">
+                  Not in the list — create it for your team
+                </span>
+              </span>
+            </button>
+          ) : null}
         </div>
-
-        {canAddSearchedProject && !c.showAddProject ? (
-          <button
-            type="button"
-            onClick={() => {
-              c.setNewProjectName(projectSearchTrimmed);
-              c.setShowAddProject(true);
-              c.setProjectError(null);
-              c.setDuplicateProject(null);
-            }}
-            className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#CFC8F3] bg-[#F5F1FF] text-sm font-semibold text-[#5A3ED0]"
-          >
-            <Plus size={15} aria-hidden="true" />
-            Add “{projectSearchTrimmed}” as a project
-          </button>
-        ) : null}
 
         {c.showAddProject ? (
           <div className="mt-3 rounded-xl border border-[#CFC8F3] bg-white p-3">
@@ -772,21 +780,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               {c.addingProject ? "Adding…" : "Add project"}
             </button>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              if (canAddSearchedProject) c.setNewProjectName(projectSearchTrimmed);
-              c.setShowAddProject(true);
-              c.setProjectError(null);
-              c.setDuplicateProject(null);
-            }}
-            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#CFC8F3] text-sm font-semibold text-[#5A3ED0]"
-          >
-            <Plus size={16} aria-hidden="true" />
-            Add missing project
-          </button>
-        )}
+        ) : null}
       </MobileSheet>
 
       <MobileSheet open={adjustSheetOpen} onClose={() => setAdjustSheetOpen(false)} title="Log overtime">

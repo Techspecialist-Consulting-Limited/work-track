@@ -62,9 +62,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     newProjectDescription,
     setNewProjectDescription,
     projectError,
-    setProjectError,
     duplicateProject,
-    setDuplicateProject,
     addingProject,
     addProject,
     useExistingProject,
@@ -155,15 +153,14 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
             : "Staff-added · pending review"
           : project.description,
     })),
-    ...(projectSearchTrimmed.length >= 2 && !projectSearchExact
-      ? [
-          {
-            value: NEW_PROJECT_OPTION,
-            label: `Add “${projectSearchTrimmed}” as a project`,
-            description: "Not in the list — create it for your team",
-          },
-        ]
-      : []),
+    {
+      value: NEW_PROJECT_OPTION,
+      label:
+        projectSearchTrimmed.length >= 2 && !projectSearchExact
+          ? `Add “${projectSearchTrimmed}” as a project`
+          : "Add a project / task…",
+      description: "Not in the list — create it for your team",
+    },
   ];
 
   const activityOptions = [
@@ -352,21 +349,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
 
                 <div className="mt-3 space-y-3">
                   <div>
-                    <div className="flex items-end justify-between gap-2">
-                      <span className="text-xs font-semibold text-[#53506B]">Project / Main Task</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAddProject((value) => !value);
-                          setProjectError(null);
-                          setDuplicateProject(null);
-                        }}
-                        className="inline-flex min-h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold text-[#6C45F5] transition hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                      >
-                        <Plus size={12} aria-hidden="true" />
-                        Add missing project
-                      </button>
-                    </div>
+                    <span className="text-xs font-semibold text-[#53506B]">Project / Main Task</span>
                     <div className="mt-1 grid grid-cols-2 gap-2">
                       <input
                         value={projectSearch}

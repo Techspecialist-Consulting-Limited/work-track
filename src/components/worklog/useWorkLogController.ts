@@ -281,8 +281,7 @@ export function useWorkLogController() {
 
   function handleProjectSelect(value: string) {
     if (value === NEW_PROJECT_OPTION) {
-      const name = projectSearch.trim();
-      if (name.length >= 2) setNewProjectName(name);
+      setNewProjectName(projectSearch.trim());
       setShowAddProject(true);
       setProjectError(null);
       setDuplicateProject(null);
