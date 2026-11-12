@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
+import { CatalogueTemplatesAdmin } from "./CatalogueTemplatesAdmin";
 import {
   assignEmployeeClient,
   createClientCategory,
@@ -51,6 +52,7 @@ export function ClientReportingAdmin() {
   const db = useSyncExternalStore(subscribeToDatabase, getDatabaseSnapshot, getServerSnapshot);
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false);
   const [selectedOrgId, setSelectedOrgId] = useState("");
+  const [view, setView] = useState<"catalogue" | "templates">("catalogue");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,6 +146,32 @@ export function ClientReportingAdmin() {
           </p>
         ) : null}
 
+        <div className="mb-4 inline-flex rounded-xl border border-[#E7E6F0] bg-white p-1" role="tablist" aria-label="Catalogue views">
+          {(
+            [
+              ["catalogue", "Client catalogues"],
+              ["templates", "Catalogue templates"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              onClick={() => setView(id)}
+              className={`min-h-9 rounded-lg px-3.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
+                view === id ? "bg-[#F5F1FF] text-[#5A3ED0]" : "text-[#4A4665] hover:bg-[#F7F7FC]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {view === "templates" ? (
+          <CatalogueTemplatesAdmin />
+        ) : (
+          <>
         <PendingSuggestions
           categories={pendingCategories}
           subcategories={pendingSubcategories}
@@ -267,6 +295,8 @@ export function ClientReportingAdmin() {
             )}
           </div>
         </div>
+          </>
+        )}
       </div>
     </main>
   );

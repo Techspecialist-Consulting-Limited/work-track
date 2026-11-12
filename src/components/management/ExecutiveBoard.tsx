@@ -45,7 +45,7 @@ import { getDaySummary, getEntryLabel } from "@/lib/worklog/selectors";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getZonedDateKey, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
-import type { Employee, TaskStatus, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
+import type { BreakEntry, Employee, TaskStatus, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
 import type { DaySummary } from "@/lib/worklog/selectors";
 
 function shiftDateKey(key: string, days: number): string {
@@ -845,74 +845,117 @@ function entryClientOrgId(db: WorkLogDatabase, entry: WorkEntry): string | undef
   return subcategory?.clientOrganisationId;
 }
 
-/**
- * Client-site work grouped under its client organisation. Category and
- * subcategory come from the entry's stored references, so rejected or
- * deactivated catalogue items still display for historical records.
- */
-function ClientWorkGroup({ entries, db }: { entries: WorkEntry[]; db: WorkLogDatabase }) {
-  const sorted = [...entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
-
+function ActivityBreakRow({ brk }: { brk: BreakEntry }) {
   return (
-    <>
-      {/* Column labels for this group: client entries have no project/subtask/status. */}
-      <tr className="border-t border-[#F5F3FB] bg-[#FBFAFE]">
-        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Time</th>
-        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Category</th>
-        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Subcategory</th>
-        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Work Performed</th>
-        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Type</th>
-        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Location</th>
-        <th scope="col" className="px-3 py-1.5 text-right text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Duration</th>
-      </tr>
-      {sorted.map((entry) => {
-        const category = entry.clientCategoryId
-          ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
-          : undefined;
-        const subcategory = entry.clientSubcategoryId
-          ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
-          : undefined;
-        return (
-          <tr key={entry.id} className="align-top border-t border-[#F5F3FB] bg-white">
-            <td className="whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-[#17172F]">
-              {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
-            </td>
-            <td className="break-words px-3 py-2.5 text-xs text-[#777A91]">{category?.name ?? "—"}</td>
-            <td className="break-words px-3 py-2.5 text-xs font-medium text-[#53506B]">
-              {subcategory?.name ?? "—"}
-            </td>
-            <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
-              <span className="whitespace-pre-wrap break-words">{entry.description.trim() || "—"}</span>
-              {entry.evidenceLink ? (
-                <a
-                  href={entry.evidenceLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
-                >
-                  <ExternalLink size={10} aria-hidden="true" /> Evidence
-                </a>
-              ) : null}
-            </td>
-            <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">Client-site</td>
-            <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">
-              {activityLocationLabel(entry.workLocation)}
-            </td>
-            <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#17172F]">
-              {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
-              {entry.overtimeMinutes > 0 ? (
-                <span
-                  className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
-                  title="Includes overtime"
-                >
-                  OT
-                </span>
-              ) : null}
-            </td>
-          </tr>
-        );
-      })}
-    </>
+    <tr className="border-t border-[#F6E7CF] bg-[#FFF9ED]">
+      <td colSpan={7} className="px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-[#8A5A00]">
+          <span className="inline-flex items-center gap-1 font-semibold text-[#B45309]">
+            <Coffee size={12} aria-hidden="true" />
+            Break
+          </span>
+          <span className="font-semibold">
+            {formatTime(brk.startAt)} – {brk.endAt ? formatTime(brk.endAt) : "In progress"}
+          </span>
+          <span className="ml-auto whitespace-nowrap font-semibold">
+            {brk.endAt ? formatMinutes(durationMinutes(brk.startAt, brk.endAt)) : "—"}
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Standalone client-site activity table. Category and subcategory come from
+ * the entry's stored references, so rejected or deactivated catalogue items
+ * still display for historical records.
+ */
+function ClientSiteTable({
+  entries,
+  db,
+  orgName,
+}: {
+  entries: WorkEntry[];
+  db: WorkLogDatabase;
+  orgName: string;
+}) {
+  return (
+    <section className="mt-5 first:mt-0" aria-label={`Client-site Work Log — ${orgName}`}>
+      <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.08em] text-[#5C5478]">
+        Client-site Work Log — {orgName}
+      </h3>
+      <div className="overflow-hidden rounded-xl border border-[#E7E6F0]">
+        <table className="w-full table-fixed border-collapse text-left">
+          <colgroup>
+            <col className="w-[14%]" />
+            <col className="w-[16%]" />
+            <col className="w-[16%]" />
+            <col className="w-[32%]" />
+            <col className="w-[10%]" />
+            <col className="w-[12%]" />
+          </colgroup>
+          <thead>
+            <tr className="bg-[#F1EDFB] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#5C5478]">
+              <th scope="col" className="px-3 py-2.5">Work Time</th>
+              <th scope="col" className="px-3 py-2.5">Work Category</th>
+              <th scope="col" className="px-3 py-2.5">Work Subcategory</th>
+              <th scope="col" className="px-3 py-2.5">Work Performed</th>
+              <th scope="col" className="px-3 py-2.5">Location</th>
+              <th scope="col" className="px-3 py-2.5 text-right">Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry) => {
+              const category = entry.clientCategoryId
+                ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+                : undefined;
+              const subcategory = entry.clientSubcategoryId
+                ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+                : undefined;
+              return (
+                <tr key={entry.id} className="align-top border-t border-[#F5F3FB] bg-white">
+                  <td className="whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-[#17172F]">
+                    {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+                  </td>
+                  <td className="break-words px-3 py-2.5 text-xs text-[#777A91]">{category?.name ?? "—"}</td>
+                  <td className="break-words px-3 py-2.5 text-xs font-medium text-[#53506B]">
+                    {subcategory?.name ?? "—"}
+                  </td>
+                  <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
+                    <span className="whitespace-pre-wrap break-words">{entry.description.trim() || "—"}</span>
+                    {entry.evidenceLink ? (
+                      <a
+                        href={entry.evidenceLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
+                      >
+                        <ExternalLink size={10} aria-hidden="true" /> Evidence
+                      </a>
+                    ) : null}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">
+                    {activityLocationLabel(entry.workLocation)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#17172F]">
+                    {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
+                    {entry.overtimeMinutes > 0 ? (
+                      <span
+                        className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
+                        title="Includes overtime"
+                      >
+                        OT
+                      </span>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -1044,16 +1087,19 @@ function EmployeeDrawer({
     clientEntriesByOrg.set(orgId, list);
   }
 
-  const blocks = [
+  // In-house records (task entries + breaks, chronological) and client-site
+  // records (grouped by client organisation) render as two separate tables.
+  const inHouseBlocks = [
     ...(hierarchy?.tasks ?? []).map((item) => ({ kind: "task" as const, at: item.firstStartAt, item })),
-    ...[...clientEntriesByOrg.entries()].map(([orgId, entries]) => ({
-      kind: "client" as const,
-      at: entries.reduce((earliest, entry) => (entry.startAt < earliest ? entry.startAt : earliest), entries[0].startAt),
-      orgId,
-      entries,
-    })),
     ...day.breaks.map((brk) => ({ kind: "break" as const, at: brk.startAt, brk })),
   ].sort((a, b) => a.at.localeCompare(b.at));
+  const clientGroups = [...clientEntriesByOrg.entries()]
+    .map(([orgId, entries]) => ({
+      orgId,
+      entries: [...entries].sort((a, b) => a.startAt.localeCompare(b.startAt)),
+      at: entries.reduce((earliest, entry) => (entry.startAt < earliest ? entry.startAt : earliest), entries[0].startAt),
+    }))
+    .sort((a, b) => a.at.localeCompare(b.at));
 
   return (
     <div
@@ -1146,81 +1192,66 @@ function EmployeeDrawer({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 sm:px-6">
-          <div className="overflow-hidden rounded-xl border border-[#E7E6F0]">
-            <table className="w-full table-fixed border-collapse text-left">
-              <colgroup>
-                <col className="w-[12%]" />
-                <col className="w-[16%]" />
-                <col className="w-[14%]" />
-                <col className="w-[30%]" />
-                <col className="w-[9%]" />
-                <col className="w-[9%]" />
-                <col className="w-[10%]" />
-              </colgroup>
-              <thead className="sticky top-0 z-20">
-                <tr className="bg-[#F1EDFB] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#5C5478]">
-                  <th scope="col" className="px-3 py-2.5">
-                    Time
-                  </th>
-                  <th scope="col" className="px-3 py-2.5">
-                    Project
-                  </th>
-                  <th scope="col" className="px-3 py-2.5">
-                    Subtask
-                  </th>
-                  <th scope="col" className="px-3 py-2.5">
-                    Work Performed
-                  </th>
-                  <th scope="col" className="px-3 py-2.5">
-                    Status
-                  </th>
-                  <th scope="col" className="px-3 py-2.5">
-                    Location
-                  </th>
-                  <th scope="col" className="px-3 py-2.5 text-right">
-                    Duration
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {blocks.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-12 text-center text-sm text-[#777A91]">
-                      No work entries recorded for this date.
-                    </td>
-                  </tr>
-                ) : (
-                  blocks.map((block) =>
-                    block.kind === "break" ? (
-                      <tr key={`break-${block.brk.id}`} className="border-t border-[#F6E7CF] bg-[#FFF9ED]">
-                        <td colSpan={7} className="px-3 py-2.5">
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-[#8A5A00]">
-                            <span className="inline-flex items-center gap-1 font-semibold text-[#B45309]">
-                              <Coffee size={12} aria-hidden="true" />
-                              Break
-                            </span>
-                            <span className="font-semibold">
-                              {formatTime(block.brk.startAt)} –{" "}
-                              {block.brk.endAt ? formatTime(block.brk.endAt) : "In progress"}
-                            </span>
-                            <span className="ml-auto whitespace-nowrap font-semibold">
-                              {block.brk.endAt
-                                ? formatMinutes(durationMinutes(block.brk.startAt, block.brk.endAt))
-                                : "—"}
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    ) : block.kind === "client" ? (
-                      <ClientWorkGroup key={`client-${block.orgId}`} entries={block.entries} db={db} />
-                    ) : (
-                      <ActivityProjectGroup key={block.item.task.id} item={block.item} db={db} />
-                    )
-                  )
-                )}
-              </tbody>
-            </table>
-          </div>
+          {inHouseBlocks.length === 0 && clientGroups.length === 0 ? (
+            <p className="rounded-xl border border-[#E7E6F0] bg-white px-4 py-12 text-center text-sm text-[#777A91]">
+              No work entries recorded for this date.
+            </p>
+          ) : null}
+
+          {inHouseBlocks.length > 0 ? (
+            <section aria-label="In-house Work Log">
+              <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.08em] text-[#5C5478]">
+                In-house Work Log
+              </h3>
+              <div className="overflow-hidden rounded-xl border border-[#E7E6F0]">
+                <table className="w-full table-fixed border-collapse text-left">
+                  <colgroup>
+                    <col className="w-[12%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[30%]" />
+                    <col className="w-[9%]" />
+                    <col className="w-[9%]" />
+                    <col className="w-[10%]" />
+                  </colgroup>
+                  <thead className="sticky top-0 z-20">
+                    <tr className="bg-[#F1EDFB] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#5C5478]">
+                      <th scope="col" className="px-3 py-2.5">Time</th>
+                      <th scope="col" className="px-3 py-2.5">Project</th>
+                      <th scope="col" className="px-3 py-2.5">Subtask</th>
+                      <th scope="col" className="px-3 py-2.5">Work Performed</th>
+                      <th scope="col" className="px-3 py-2.5">Status</th>
+                      <th scope="col" className="px-3 py-2.5">Location</th>
+                      <th scope="col" className="px-3 py-2.5 text-right">Duration</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inHouseBlocks.map((block) =>
+                      block.kind === "break" ? (
+                        <ActivityBreakRow key={`break-${block.brk.id}`} brk={block.brk} />
+                      ) : (
+                        <ActivityProjectGroup key={block.item.task.id} item={block.item} db={db} />
+                      )
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+
+          {clientGroups.map((group) => {
+            const org = group.orgId
+              ? db.organisations.find((row) => row.id === group.orgId)
+              : undefined;
+            return (
+              <ClientSiteTable
+                key={`client-${group.orgId || "none"}`}
+                entries={group.entries}
+                db={db}
+                orgName={org?.name ?? "Client site"}
+              />
+            );
+          })}
         </div>
 
         <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[#EEEAF2] px-4 py-2.5 sm:px-6">

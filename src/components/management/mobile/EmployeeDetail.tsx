@@ -238,9 +238,6 @@ function ActivityClientCard({ entries, db }: { entries: WorkEntry[]; db: WorkLog
             Client work · {sorted.length} {sorted.length === 1 ? "entry" : "entries"} · {formatMinutes(minutes)}
           </span>
         </span>
-        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
-          Client
-        </span>
       </div>
       <div className="space-y-2 p-3">
         {sorted.map((entry) => {

@@ -13,7 +13,13 @@ import {
   createEmployerOrganisationAction,
   resendEmployeeInvitationAction,
   revokeEmployeeInvitationAction,
+  applyCatalogueTemplateAction,
   createClientSubcategoryAction,
+  deleteEmployeeAction,
+  setEmployeeActiveAction,
+  deleteCatalogueTemplateAction,
+  saveCatalogueTemplateAction,
+  saveClientCatalogueAsTemplateAction,
   createStaffProjectAction,
   createSubtaskAction,
   createTaskAction,
@@ -170,6 +176,24 @@ export async function POST(request: Request) {
         break;
       case "revokeEmployeeInvitation":
         result = await revokeEmployeeInvitationAction(membership, p as never);
+        break;
+      case "saveClientCatalogueAsTemplate":
+        result = await saveClientCatalogueAsTemplateAction(membership, p as never);
+        break;
+      case "saveCatalogueTemplate":
+        result = await saveCatalogueTemplateAction(membership, p as never);
+        break;
+      case "deleteCatalogueTemplate":
+        result = await deleteCatalogueTemplateAction(membership, p as never);
+        break;
+      case "applyCatalogueTemplate":
+        result = await applyCatalogueTemplateAction(membership, p as never);
+        break;
+      case "setEmployeeActive":
+        result = await setEmployeeActiveAction(membership, p as never);
+        break;
+      case "deleteEmployee":
+        result = await deleteEmployeeAction(membership, p as never);
         break;
       case "updateOrganisation":
         result = await updateOrganisationAction(membership, p as never);
