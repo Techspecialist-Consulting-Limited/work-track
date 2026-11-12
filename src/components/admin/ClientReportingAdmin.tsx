@@ -20,6 +20,7 @@ import {
   assignEmployeeClient,
   createClientCategory,
   createClientOrganisation,
+  createEmployerOrganisation,
   createClientSubcategory,
   getDatabaseSnapshot,
   getServerSnapshot,
@@ -281,23 +282,27 @@ function NewClientCard({
   onError: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<"client" | "employer">("client");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
+  const kindLabel = kind === "client" ? "client" : "employer";
 
   async function submit() {
     if (name.trim().length < 2) {
-      onError("Enter a client name of at least 2 characters.");
+      onError(`Enter a ${kindLabel} name of at least 2 characters.`);
       return;
     }
     setSaving(true);
     try {
-      const result = await createClientOrganisation({ name: name.trim(), description: description.trim() || undefined });
+      const input = { name: name.trim(), description: description.trim() || undefined };
+      const result =
+        kind === "client" ? await createClientOrganisation(input) : await createEmployerOrganisation(input);
       if (!result || result.ok === false) {
-        onError(result?.message ?? "Could not create the client organisation.");
+        onError(result?.message ?? `Could not create the ${kindLabel} organisation.`);
         return;
       }
-      onCreated(result.organisationId ?? "", "Client organisation created.");
+      onCreated(result.organisationId ?? "", `${kind === "client" ? "Client" : "Employer"} organisation created.`);
       setName("");
       setDescription("");
       setOpen(false);
@@ -313,22 +318,33 @@ function NewClientCard({
       {open ? (
         <>
           <div className="flex items-center justify-between">
-            <h2 className="text-xs font-bold uppercase tracking-wide text-[#8B8B9A]">New client</h2>
+            <h2 className="text-xs font-bold uppercase tracking-wide text-[#8B8B9A]">New organisation</h2>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="Cancel new client"
+              aria-label="Cancel new organisation"
               className="grid h-7 w-7 place-items-center rounded-lg text-[#777A91] hover:bg-[#F7F7FC]"
             >
               <X size={14} aria-hidden="true" />
             </button>
           </div>
           <label className="mt-2 block text-[11px] font-semibold text-[#53506B]">
-            Client organisation name
+            Organisation kind
+            <select
+              value={kind}
+              onChange={(event) => setKind(event.target.value as "client" | "employer")}
+              className={INPUT_CLASS}
+            >
+              <option value="client">Client</option>
+              <option value="employer">Employer</option>
+            </select>
+          </label>
+          <label className="mt-2 block text-[11px] font-semibold text-[#53506B]">
+            {kind === "client" ? "Client" : "Employer"} organisation name
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="e.g. Acme Corporation"
+              placeholder={kind === "client" ? "e.g. Acme Corporation" : "e.g. TechSpecialist Consult Limited"}
               className={INPUT_CLASS}
               autoFocus
             />
@@ -348,7 +364,7 @@ function NewClientCard({
             disabled={saving}
             className="mt-2 inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-[#6C45F5] text-sm font-semibold text-white transition hover:bg-[#5935DE] disabled:opacity-50"
           >
-            <Plus size={15} aria-hidden="true" /> {saving ? "Creating…" : "Create client"}
+            <Plus size={15} aria-hidden="true" /> {saving ? "Creating…" : `Create ${kindLabel}`}
           </button>
         </>
       ) : (
@@ -357,7 +373,7 @@ function NewClientCard({
           onClick={() => setOpen(true)}
           className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-[#CFC8F3] text-sm font-semibold text-[#5A3ED0] transition hover:bg-[#F5F1FF]"
         >
-          <Plus size={15} aria-hidden="true" /> New client organisation
+          <Plus size={15} aria-hidden="true" /> New organisation
         </button>
       )}
     </section>

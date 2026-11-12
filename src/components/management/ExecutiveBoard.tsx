@@ -779,27 +779,6 @@ function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDa
 
   return (
     <>
-      <tr className="border-t-2 border-[#E7E1F8] bg-[#F5F2FD]">
-        <td colSpan={7} className="px-3 py-2.5">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
-              <span className="break-words text-xs font-bold text-[#17172F]">{projectName}</span>
-            </span>
-            <ProjectDescription name={projectName} description={projectDescription} />
-            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
-              {item.entryCount} {item.entryCount === 1 ? "entry" : "entries"}
-            </span>
-            <ActivityStatusBadge status={task.currentStatus} />
-            {item.verification.level !== "verified" ? (
-              <VerificationBadge verification={item.verification} />
-            ) : null}
-            <span className="ml-auto whitespace-nowrap text-xs font-bold text-[#17172F]">
-              {formatMinutes(item.minutes)}
-            </span>
-          </div>
-        </td>
-      </tr>
       {entries.map((entry) => {
         const sub = entry.subtaskId ? subtaskById.get(entry.subtaskId) : undefined;
         return (
@@ -807,7 +786,13 @@ function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDa
             <td className="whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-[#17172F]">
               {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
             </td>
-            <td className="break-words px-3 py-2.5 text-xs text-[#777A91]">{projectName}</td>
+            <td className="break-words px-3 py-2.5 text-xs">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <Folder size={13} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
+                <span className="break-words font-bold text-[#17172F]">{projectName}</span>
+                <ProjectDescription name={projectName} description={projectDescription} />
+              </span>
+            </td>
             <td className="break-words px-3 py-2.5 text-xs font-medium text-[#53506B]">
               {sub ? sub.title : "—"}
             </td>
@@ -867,33 +852,9 @@ function entryClientOrgId(db: WorkLogDatabase, entry: WorkEntry): string | undef
  */
 function ClientWorkGroup({ entries, db }: { entries: WorkEntry[]; db: WorkLogDatabase }) {
   const sorted = [...entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
-  const orgId = entryClientOrgId(db, sorted[0]);
-  const org = orgId ? db.organisations.find((row) => row.id === orgId) : undefined;
-  const minutes = sorted.reduce((total, entry) => total + durationMinutes(entry.startAt, entry.endAt), 0);
 
   return (
     <>
-      <tr className="border-t-2 border-[#E7E1F8] bg-[#F5F2FD]">
-        <td colSpan={7} className="px-3 py-2.5">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
-              <span className="break-words text-xs font-bold text-[#17172F]">
-                {org?.name ?? "Client site"}
-              </span>
-            </span>
-            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
-              Client work
-            </span>
-            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
-              {sorted.length} {sorted.length === 1 ? "entry" : "entries"}
-            </span>
-            <span className="ml-auto whitespace-nowrap text-xs font-bold text-[#17172F]">
-              {formatMinutes(minutes)}
-            </span>
-          </div>
-        </td>
-      </tr>
       {/* Column labels for this group: client entries have no project/subtask/status. */}
       <tr className="border-t border-[#F5F3FB] bg-[#FBFAFE]">
         <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Time</th>

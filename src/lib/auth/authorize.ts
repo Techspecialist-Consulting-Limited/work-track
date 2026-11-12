@@ -327,3 +327,5 @@ export async function requireConfigAdminPage(): Promise<WorkTrackMembership> {
 /** The role the user selected at login — stored in a short-lived signed cookie. */
 export const LOGIN_ROLE_COOKIE = "wt_login_role";
 export const LOGIN_ROLE_MAX_AGE = 60 * 15; // 15 minutes
+export const INVITE_TOKEN_COOKIE = "wt_invite_token";
+export const INVITE_TOKEN_MAX_AGE = 60 * 30; // 30 minutes

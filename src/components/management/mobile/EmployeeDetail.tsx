@@ -136,7 +136,6 @@ function ActivityTaskCard({
             {timeLabel} · {formatMinutes(item.minutes)}
           </span>
         </span>
-        <ActivityStatusBadge status={task.currentStatus} />
       </button>
       <div className="space-y-2 p-3">
         {!open ? (
