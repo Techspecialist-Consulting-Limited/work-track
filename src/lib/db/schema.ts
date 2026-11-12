@@ -11,6 +11,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 export const membershipRoleEnum = pgEnum("membership_role", ["staff", "hr", "chairman"]);
@@ -44,6 +45,10 @@ export const memberships = pgTable(
     microsoftTenantId: text("microsoft_tenant_id").notNull(),
     microsoftObjectId: text("microsoft_object_id").notNull(),
     isActive: boolean("is_active").notNull().default(true),
+    /** Configuration permission, independent of HR/chairman reporting access. */
+    isConfigAdmin: boolean("is_config_admin").notNull().default(false),
+    /** Last team the staff member selected; validated against employee_teams on use. */
+    activeTeamId: uuid("active_team_id").references((): AnyPgColumn => teams.id),
     ...timestamps,
   },
   (t) => [
@@ -53,10 +58,84 @@ export const memberships = pgTable(
       t.role
     ),
     index("memberships_employee_idx").on(t.employeeId),
+    index("memberships_active_team_idx").on(t.activeTeamId),
     check(
       "memberships_staff_requires_employee",
       sql`role <> 'staff' OR employee_id IS NOT NULL`
     ),
+  ]
+);
+
+export const teams = pgTable(
+  "teams",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    description: text("description"),
+    isActive: boolean("is_active").notNull().default(true),
+    /** Exactly one default team keeps auto-provisioned staff usable. */
+    isDefault: boolean("is_default").notNull().default(false),
+    /** 'backfill' marks teams auto-created from employee departments, unverified. */
+    origin: text("origin").notNull().default("admin"),
+    createdByMembershipId: uuid("created_by_membership_id").references((): AnyPgColumn => memberships.id),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("teams_name_key").on(sql`lower(${t.name})`),
+    uniqueIndex("teams_default_key")
+      .on(t.isDefault)
+      .where(sql`${t.isDefault}`),
+    index("teams_active_idx").on(t.isActive),
+    check("teams_name_not_blank", sql`length(btrim(name)) > 0`),
+    check("teams_origin_check", sql`origin IN ('admin', 'backfill')`),
+  ]
+);
+
+export const employeeTeams = pgTable(
+  "employee_teams",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id),
+    createdByMembershipId: uuid("created_by_membership_id").references(() => memberships.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("employee_teams_employee_team_key").on(t.employeeId, t.teamId),
+    index("employee_teams_team_idx").on(t.teamId),
+  ]
+);
+
+export const teamProjects = pgTable(
+  "team_projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    isActive: boolean("is_active").notNull().default(true),
+    /** 'staff' projects were added from the staff form and may await promotion. */
+    origin: text("origin").notNull().default("admin"),
+    createdByEmployeeId: uuid("created_by_employee_id").references(() => employees.id),
+    createdByMembershipId: uuid("created_by_membership_id").references(() => memberships.id),
+    promotedAt: timestamp("promoted_at", { withTimezone: true }),
+    promotedByMembershipId: uuid("promoted_by_membership_id").references(() => memberships.id),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("team_projects_team_name_key")
+      .on(t.teamId, sql`lower(${t.name})`)
+      .where(sql`${t.archivedAt} IS NULL`),
+    index("team_projects_team_idx").on(t.teamId, t.isActive),
+    check("team_projects_name_not_blank", sql`length(btrim(name)) > 0`),
+    check("team_projects_origin_check", sql`origin IN ('admin', 'staff')`),
   ]
 );
 
@@ -79,6 +158,10 @@ export const tasks = pgTable(
       .notNull()
       .references(() => employees.id),
     categoryId: uuid("category_id").references(() => taskCategories.id),
+    /** Team the task belongs to; null on legacy tasks created before teams existed. */
+    teamId: uuid("team_id").references(() => teams.id),
+    /** Catalog project this task represents; null on legacy tasks. */
+    projectId: uuid("project_id").references(() => teamProjects.id),
     title: text("title").notNull(),
     description: text("description"),
     currentStatus: taskStatusEnum("current_status").notNull().default("ongoing"),
@@ -103,6 +186,11 @@ export const tasks = pgTable(
   (t) => [
     index("tasks_employee_idx").on(t.employeeId),
     index("tasks_category_idx").on(t.categoryId),
+    index("tasks_team_idx").on(t.teamId),
+    index("tasks_project_idx").on(t.projectId),
+    uniqueIndex("tasks_employee_project_key")
+      .on(t.employeeId, t.projectId)
+      .where(sql`${t.projectId} IS NOT NULL AND ${t.archivedAt} IS NULL`),
     index("tasks_recovery_import_idx").on(t.recoveryImportId),
     check(
       "tasks_status_source_check",

@@ -48,8 +48,11 @@ function entry(id: string, taskId: string, startAt: string, endAt: string, norma
 
 function database(overrides: Partial<WorkLogDatabase> = {}): WorkLogDatabase {
   return {
-    version: 1,
+    version: 2,
     employees: [{ id: "emp-1", name: "Alex", role: "Developer", department: "Engineering" }],
+    teams: [],
+    employeeTeams: [],
+    projects: [],
     categories: [],
     tasks: [],
     subtasks: [],
@@ -77,7 +80,9 @@ test("progress updates are required and length-limited", () => {
 });
 
 test("existing entry validators still apply", () => {
-  assert.equal(validateDescription("").ok, false);
+  assert.equal(validateDescription("").ok, true);
+  assert.equal(validateDescription("   ").ok, true);
+  assert.equal(validateDescription("x".repeat(501)).ok, false);
   assert.equal(validateDescription("Reviewed the change.").ok, true);
   assert.equal(validateEvidenceLink("https://example.com/proof").ok, true);
   assert.equal(validateEvidenceLink("javascript:alert(1)").ok, false);

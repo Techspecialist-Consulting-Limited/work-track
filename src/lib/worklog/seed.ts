@@ -2,12 +2,15 @@ import { splitIntervalMinutes } from "./time";
 import type {
   BreakEntry,
   Employee,
+  EmployeeTeam,
   ProgressUpdate,
   StatusHistoryEvent,
   Subtask,
   Task,
   TaskCategory,
   TaskStatus,
+  Team,
+  TeamProject,
   WorkEntry,
   WorkLocation,
   WorkLogDatabase,
@@ -33,6 +36,61 @@ export const SEED_CATEGORIES: TaskCategory[] = [
   { id: "support", name: "Support" },
   { id: "administration", name: "Administration" },
 ];
+
+const SEED_TIMESTAMP = "2026-10-26T08:00:00.000Z";
+
+/** One team per department, mirroring the migration's department backfill. */
+export const SEED_TEAMS: Team[] = [
+  {
+    id: "team-engineering",
+    name: "Engineering",
+    description: "Product engineering, platform and delivery.",
+    isActive: true,
+    isDefault: false,
+    origin: "admin",
+    createdAt: SEED_TIMESTAMP,
+    updatedAt: SEED_TIMESTAMP,
+  },
+  {
+    id: "team-product",
+    name: "Product",
+    description: "Requirements, analysis and stakeholder work.",
+    isActive: true,
+    isDefault: false,
+    origin: "admin",
+    createdAt: SEED_TIMESTAMP,
+    updatedAt: SEED_TIMESTAMP,
+  },
+  {
+    id: "team-design",
+    name: "Design",
+    description: "Product design and design systems.",
+    isActive: true,
+    isDefault: false,
+    origin: "admin",
+    createdAt: SEED_TIMESTAMP,
+    updatedAt: SEED_TIMESTAMP,
+  },
+  {
+    id: "team-support",
+    name: "Support",
+    description: "Customer support and escalations.",
+    isActive: true,
+    isDefault: false,
+    origin: "admin",
+    createdAt: SEED_TIMESTAMP,
+    updatedAt: SEED_TIMESTAMP,
+  },
+];
+
+const TEAM_ID_BY_DEPARTMENT = new Map(SEED_TEAMS.map((team) => [team.name, team.id]));
+
+export const SEED_EMPLOYEE_TEAMS: EmployeeTeam[] = SEED_EMPLOYEES.flatMap((employee) => {
+  const teamId = TEAM_ID_BY_DEPARTMENT.get(employee.department);
+  return teamId
+    ? [{ id: `et-${employee.id}-${teamId}`, employeeId: employee.id, teamId, createdAt: SEED_TIMESTAMP }]
+    : [];
+});
 
 const TASK_TITLES: Record<string, string[]> = {
   alex: ["Login page fixes", "Sprint API integration", "Release checklist"],
@@ -287,6 +345,7 @@ export function buildSeedDatabase(): WorkLogDatabase {
   const subtasks: Subtask[] = [];
   const progressUpdates: ProgressUpdate[] = [];
   const statusHistory: StatusHistoryEvent[] = [];
+  const projects: TeamProject[] = [];
   const days = calendarDays();
   const lastWorkingDay = days.filter((d) => isWorkingDay(d)).at(-1);
 
@@ -382,9 +441,41 @@ export function buildSeedDatabase(): WorkLogDatabase {
     }
   }
 
+  // Project library: one catalog project per distinct task title within a team.
+  const departmentByEmployee = new Map(SEED_EMPLOYEES.map((employee) => [employee.id, employee.department]));
+  for (const task of tasks) {
+    const department = departmentByEmployee.get(task.employeeId) ?? "";
+    const teamId = TEAM_ID_BY_DEPARTMENT.get(department);
+    if (!teamId) continue;
+    const name = task.title;
+    let project = projects.find(
+      (candidate) =>
+        candidate.teamId === teamId && candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+    );
+    if (!project) {
+      project = {
+        id: `project-${teamId}-${name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        teamId,
+        name,
+        description: task.description,
+        isActive: true,
+        origin: "admin",
+        promotedAt: SEED_TIMESTAMP,
+        createdAt: SEED_TIMESTAMP,
+        updatedAt: SEED_TIMESTAMP,
+      };
+      projects.push(project);
+    }
+    task.teamId = teamId;
+    task.projectId = project.id;
+  }
+
   return {
-    version: 1,
+    version: 2,
     employees: SEED_EMPLOYEES,
+    teams: SEED_TEAMS,
+    employeeTeams: SEED_EMPLOYEE_TEAMS,
+    projects,
     categories: SEED_CATEGORIES,
     tasks,
     subtasks,

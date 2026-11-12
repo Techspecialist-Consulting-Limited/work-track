@@ -6,7 +6,7 @@ export const WORKLOG_RULES = {
   workStartHour: 9,
   workEndHour: 17,
   maxBreakMinutesPerDay: 60,
-  descriptionMinLength: 1,
+  descriptionMinLength: 0,
   descriptionMaxLength: 500,
   taskTitleMaxLength: 120,
   subtaskTitleMaxLength: 120,

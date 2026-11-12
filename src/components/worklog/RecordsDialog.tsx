@@ -134,7 +134,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                               Subtask: {getSubtaskById(c.db, item.entry.subtaskId)?.title ?? "Removed subtask"}
                             </p>
                           ) : null}
-                          <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-4 text-[#53506B]">{item.entry.description}</p>
+                          <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-4 text-[#53506B]">{item.entry.description.trim() || "—"}</p>
                           <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-[#777A91]">
                             {WORK_LOCATION_LABELS[item.entry.workLocation]} · Task status{" "}
                             <StatusBadge status={getTaskById(c.db, item.entry.taskId)?.currentStatus ?? "ongoing"} />

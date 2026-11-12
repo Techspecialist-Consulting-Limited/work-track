@@ -1,11 +1,10 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -14,6 +13,8 @@ import {
   ExternalLink,
   FileText,
   Folder,
+  Info,
+  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -34,6 +35,7 @@ import {
 import {
   getDatabaseSnapshot,
   getSessionEmployeeId,
+  getSessionIsConfigAdmin,
   getSessionRole,
   getServerSnapshot,
   getSessionUser,
@@ -229,6 +231,15 @@ function ExecutiveDesktopBoard() {
               <FileText size={15} aria-hidden="true" />
               Reports
             </Link>
+            {getSessionIsConfigAdmin() ? (
+              <Link
+                href="/admin/teams"
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[#E7E6F0] px-3 text-sm font-semibold text-[#4A4665] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+              >
+                <Users size={15} aria-hidden="true" />
+                Teams
+              </Link>
+            ) : null}
             {getSessionEmployeeId() && getSessionRole() !== "chairman" ? (
               <Link
                 href="/"
@@ -706,170 +717,114 @@ function ActivityMetricCard({ icon, label, value }: { icon: ReactNode; label: st
   );
 }
 
-function ActivityEntryRow({
-  entry,
+function ProjectDescription({
   name,
-  status,
+  description,
 }: {
-  entry: WorkEntry;
   name: string;
-  status: TaskStatus;
+  description?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  if (!description) return null;
   return (
-    <tr className="align-top border-t border-[#F5F3FB] bg-white">
-      <td className="whitespace-nowrap px-3 py-2.5">
-        <span className="block text-xs font-semibold text-[#17172F]">
-          {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+    <span className="relative inline-flex shrink-0">
+      <button
+        type="button"
+        aria-label={`About ${name}`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="grid h-5 w-5 place-items-center rounded-full border border-[#D8D0F2] bg-white text-[#6C45F5] transition hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+      >
+        <Info size={11} aria-hidden="true" />
+      </button>
+      {open ? (
+        <span
+          role="dialog"
+          aria-label={`${name} description`}
+          className="absolute left-0 top-full z-30 mt-1 w-64 rounded-xl border border-[#E7E6F0] bg-white p-2.5 text-left text-[11px] font-normal leading-4 text-[#53506B] shadow-xl"
+        >
+          {description}
         </span>
-      </td>
-      <td className="max-w-[180px] px-3 py-2.5 text-xs font-medium text-[#39364F]">
-        <span className="break-words">{name}</span>
-      </td>
-      <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
-      <td className="max-w-[280px] px-3 py-2.5 text-xs leading-5 text-[#53506B]">
-        <span className="whitespace-pre-wrap break-words">{entry.description}</span>
-        {entry.evidenceLink ? (
-          <a
-            href={entry.evidenceLink}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
-          >
-            <ExternalLink size={10} aria-hidden="true" /> Evidence
-          </a>
-        ) : null}
-      </td>
-      <td className="px-3 py-2.5">
-        <ActivityStatusBadge status={status} />
-      </td>
-      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">{activityLocationLabel(entry.workLocation)}</td>
-      <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#17172F]">
-        {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
-        {entry.overtimeMinutes > 0 ? (
-          <span
-            className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
-            title="Includes overtime"
-          >
-            OT
-          </span>
-        ) : null}
-      </td>
-    </tr>
+      ) : null}
+    </span>
   );
 }
 
-function ActivityTaskRows({
-  item,
-  open,
-  onToggle,
-}: {
-  item: HierarchyTask;
-  open: boolean;
-  onToggle: () => void;
-}) {
+function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDatabase }) {
   const { task } = item;
-  const directEntries = item.entries.filter((entry) => !entry.subtaskId);
-  const sortedEntries = [...item.entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
-  const intervalsTitle = sortedEntries
-    .map((entry) => `${formatTime(entry.startAt)} – ${formatTime(entry.endAt)}`)
-    .join("\n");
-  const taskTimeLabel =
-    item.entries.length === 1
-      ? `${formatTime(item.entries[0].startAt)} – ${formatTime(item.entries[0].endAt)}`
-      : `${item.entries.length} ${item.entries.length === 1 ? "entry" : "entries"}`;
+  const project = task.projectId ? db.projects.find((row) => row.id === task.projectId) : undefined;
+  const projectName = project?.name ?? task.title;
+  const projectDescription = project?.description ?? task.description;
+  const entries = [...item.entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const subtaskById = new Map(item.subtasks.map((sub) => [sub.subtask.id, sub.subtask]));
+
   return (
     <>
-      <tr className="bg-[#F5F2FD] align-top">
-        <td className="whitespace-nowrap px-3 py-2.5" title={item.entries.length > 1 ? intervalsTitle : undefined}>
-          <span className="block text-xs font-semibold text-[#17172F]">{taskTimeLabel}</span>
-        </td>
-        <td className="px-3 py-2.5">
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={open}
-            className="flex w-full items-center gap-1.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-          >
-            <ChevronDown
-              size={14}
-              aria-hidden="true"
-              className={`shrink-0 text-[#DC2626] transition-transform ${open ? "" : "-rotate-90"}`}
-            />
-            <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
-            <span className="break-words text-xs font-bold text-[#17172F]">{task.title}</span>
-          </button>
-          {item.entryCount > 1 ? (
-            <span className="mt-0.5 block pl-6 text-[10px] font-medium text-[#8B8B9A]">
-              {item.entryCount} work {item.entryCount === 1 ? "entry" : "entries"}
+      <tr className="border-t-2 border-[#E7E1F8] bg-[#F5F2FD]">
+        <td colSpan={7} className="px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
+              <span className="break-words text-xs font-bold text-[#17172F]">{projectName}</span>
             </span>
-          ) : null}
-        </td>
-        <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
-          {open ? <span className="whitespace-pre-wrap break-words">{task.description ?? "—"}</span> : <span className="text-[#8B8B9A]">—</span>}
-        </td>
-        <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
-        <td className="px-3 py-2.5">
-          <ActivityStatusBadge status={task.currentStatus} />
-        </td>
-        <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
-        <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-bold text-[#17172F]">
-          {item.minutes > 0 ? formatMinutes(item.minutes) : "—"}
+            <ProjectDescription name={projectName} description={projectDescription} />
+            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
+              {item.entryCount} {item.entryCount === 1 ? "entry" : "entries"}
+            </span>
+            <ActivityStatusBadge status={task.currentStatus} />
+            {item.verification.level !== "verified" ? (
+              <VerificationBadge verification={item.verification} />
+            ) : null}
+            <span className="ml-auto whitespace-nowrap text-xs font-bold text-[#17172F]">
+              {formatMinutes(item.minutes)}
+            </span>
+          </div>
         </td>
       </tr>
-      {open ? (
-        <>
-          {item.subtasks.map((sub) => (
-            <Fragment key={sub.subtask.id}>
-              <tr className="bg-[#FBFAFE] align-top">
-                <td className="whitespace-nowrap px-3 py-2">
-                  <span className="block text-[11px] font-semibold text-[#39364F]">
-                    {sub.entries.length > 0
-                      ? `${sub.entries.length} ${sub.entries.length === 1 ? "entry" : "entries"}`
-                      : "—"}
-                  </span>
-                </td>
-                <td className="px-3 py-2 pl-9 text-xs font-semibold text-[#39364F]">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-3.5 w-px bg-[#D8D0F2]" aria-hidden="true" />
-                    <span className="break-words">{sub.subtask.title}</span>
-                  </span>
-                </td>
-                <td className="px-3 py-2.5 text-xs leading-5 text-[#777A91]">
-                  <span className="whitespace-pre-wrap break-words">{sub.subtask.description ?? "—"}</span>
-                </td>
-                <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
-                <td className="px-3 py-2.5">
-                  <ActivityStatusBadge status={sub.subtask.status} />
-                </td>
-                <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">—</td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#53506B]">
-                  —
-                </td>
-              </tr>
-              {sub.entries.map((entry) => (
-                <ActivityEntryRow key={entry.id} entry={entry} name={sub.subtask.title} status={sub.subtask.status} />
-              ))}
-            </Fragment>
-          ))}
-          {directEntries.map((entry) => (
-            <ActivityEntryRow key={entry.id} entry={entry} name={task.title} status={task.currentStatus} />
-          ))}
-        </>
-      ) : (
-        sortedEntries.map((entry) => {
-          const sub = entry.subtaskId
-            ? item.subtasks.find((candidate) => candidate.subtask.id === entry.subtaskId)
-            : undefined;
-          return (
-            <ActivityEntryRow
-              key={entry.id}
-              entry={entry}
-              name={sub ? sub.subtask.title : task.title}
-              status={sub ? sub.subtask.status : task.currentStatus}
-            />
-          );
-        })
-      )}
+      {entries.map((entry) => {
+        const sub = entry.subtaskId ? subtaskById.get(entry.subtaskId) : undefined;
+        return (
+          <tr key={entry.id} className="align-top border-t border-[#F5F3FB] bg-white">
+            <td className="whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-[#17172F]">
+              {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+            </td>
+            <td className="break-words px-3 py-2.5 text-xs text-[#777A91]">{projectName}</td>
+            <td className="break-words px-3 py-2.5 text-xs font-medium text-[#53506B]">
+              {sub ? sub.title : "—"}
+            </td>
+            <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
+              <span className="whitespace-pre-wrap break-words">{entry.description.trim() || "—"}</span>
+              {entry.evidenceLink ? (
+                <a
+                  href={entry.evidenceLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
+                >
+                  <ExternalLink size={10} aria-hidden="true" /> Evidence
+                </a>
+              ) : null}
+            </td>
+            <td className="px-3 py-2.5">
+              <ActivityStatusBadge status={sub ? sub.status : task.currentStatus} />
+            </td>
+            <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">
+              {activityLocationLabel(entry.workLocation)}
+            </td>
+            <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#17172F]">
+              {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
+              {entry.overtimeMinutes > 0 ? (
+                <span
+                  className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
+                  title="Includes overtime"
+                >
+                  OT
+                </span>
+              ) : null}
+            </td>
+          </tr>
+        );
+      })}
     </>
   );
 }
@@ -893,22 +848,11 @@ function EmployeeDrawer({
 }) {
   const [viewDate, setViewDate] = useState(dateKey);
   const [syncedKey, setSyncedKey] = useState(`${employee.id}:${dateKey}`);
-  const [openTasks, setOpenTasks] = useState<ReadonlySet<string>>(() => new Set());
   const syncKey = `${employee.id}:${dateKey}`;
   if (syncKey !== syncedKey) {
     setSyncedKey(syncKey);
     setViewDate(dateKey);
-    setOpenTasks(new Set());
   }
-
-  const toggleTask = (taskId: string) => {
-    setOpenTasks((prev) => {
-      const next = new Set(prev);
-      if (next.has(taskId)) next.delete(taskId);
-      else next.add(taskId);
-      return next;
-    });
-  };
 
   const day = getDaySummary(db, employee.id, viewDate, new Date());
   const hierarchy = buildEmployeeHierarchy(db, employee.id, viewDate);
@@ -1002,22 +946,31 @@ function EmployeeDrawer({
           />
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-4 py-3 sm:px-6">
-          <div className="overflow-x-auto rounded-xl border border-[#E7E6F0]">
-            <table className="w-full min-w-[860px] border-collapse text-left">
-              <thead className="sticky top-0 z-10">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 sm:px-6">
+          <div className="overflow-hidden rounded-xl border border-[#E7E6F0]">
+            <table className="w-full table-fixed border-collapse text-left">
+              <colgroup>
+                <col className="w-[12%]" />
+                <col className="w-[16%]" />
+                <col className="w-[14%]" />
+                <col className="w-[30%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[10%]" />
+              </colgroup>
+              <thead className="sticky top-0 z-20">
                 <tr className="bg-[#F1EDFB] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#5C5478]">
                   <th scope="col" className="px-3 py-2.5">
                     Time
                   </th>
                   <th scope="col" className="px-3 py-2.5">
-                    Task / Subtask
+                    Project
                   </th>
                   <th scope="col" className="px-3 py-2.5">
-                    Task Description
+                    Subtask
                   </th>
                   <th scope="col" className="px-3 py-2.5">
-                    Work Performed (This Period)
+                    Work Performed
                   </th>
                   <th scope="col" className="px-3 py-2.5">
                     Status
@@ -1040,36 +993,27 @@ function EmployeeDrawer({
                 ) : (
                   blocks.map((block) =>
                     block.kind === "break" ? (
-                      <tr key={`break-${block.brk.id}`} className="border-t border-[#F6E7CF] bg-[#FFF9ED] align-top">
-                        <td className="whitespace-nowrap px-3 py-2.5">
-                          <span className="block text-xs font-semibold text-[#8A5A00]">
-                            {formatTime(block.brk.startAt)} –{" "}
-                            {block.brk.endAt ? formatTime(block.brk.endAt) : "In progress"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#B45309]">
-                            <Coffee size={12} aria-hidden="true" />
-                            Break
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 text-xs text-[#8A5A00]">—</td>
-                        <td className="px-3 py-2.5 text-xs italic text-[#8A5A00]">Break</td>
-                        <td className="px-3 py-2.5 text-xs text-[#8A5A00]">—</td>
-                        <td className="px-3 py-2.5 text-xs text-[#8A5A00]">—</td>
-                        <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#8A5A00]">
-                          {block.brk.endAt
-                            ? formatMinutes(durationMinutes(block.brk.startAt, block.brk.endAt))
-                            : "—"}
+                      <tr key={`break-${block.brk.id}`} className="border-t border-[#F6E7CF] bg-[#FFF9ED]">
+                        <td colSpan={7} className="px-3 py-2.5">
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-[#8A5A00]">
+                            <span className="inline-flex items-center gap-1 font-semibold text-[#B45309]">
+                              <Coffee size={12} aria-hidden="true" />
+                              Break
+                            </span>
+                            <span className="font-semibold">
+                              {formatTime(block.brk.startAt)} –{" "}
+                              {block.brk.endAt ? formatTime(block.brk.endAt) : "In progress"}
+                            </span>
+                            <span className="ml-auto whitespace-nowrap font-semibold">
+                              {block.brk.endAt
+                                ? formatMinutes(durationMinutes(block.brk.startAt, block.brk.endAt))
+                                : "—"}
+                            </span>
+                          </div>
                         </td>
                       </tr>
                     ) : (
-                      <ActivityTaskRows
-                        key={block.item.task.id}
-                        item={block.item}
-                        open={openTasks.has(block.item.task.id)}
-                        onToggle={() => toggleTask(block.item.task.id)}
-                      />
+                      <ActivityProjectGroup key={block.item.task.id} item={block.item} db={db} />
                     )
                   )
                 )}

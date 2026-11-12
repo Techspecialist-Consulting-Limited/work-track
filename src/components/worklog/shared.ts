@@ -4,6 +4,7 @@ import { dateKeyOf } from "@/lib/worklog/time";
 import type { BreakEntry, Task, TaskStatus, WorkEntry } from "@/lib/worklog/types";
 
 export const NEW_TASK = "__new_task__";
+export const NEW_PROJECT_OPTION = "__new_project__";
 
 export const SCHEDULED_MINUTES = (() => {
   const [startHour, startMinute] = WORKTRACK_SCHEDULE.startTime.split(":").map(Number);

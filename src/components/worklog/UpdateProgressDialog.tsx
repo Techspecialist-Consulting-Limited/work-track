@@ -48,19 +48,21 @@ export function UpdateProgressDialog({ c }: { c: WorkLogController }) {
   function save() {
     setError(null);
     const trimmed = body.trim();
-    if (!trimmed) {
-      setError("Describe the progress you made.");
+    const wantsStatus = status !== "" && status !== currentStatus;
+    if (!trimmed && !wantsStatus) {
+      setError("Add a progress note or choose a status change.");
       return;
     }
-    const wantsStatus = status !== "" && status !== currentStatus;
     if (wantsStatus && (status === "blocked" || status === "dropped") && !reason.trim()) {
       setError(`Add a reason for ${TASK_STATUS_LABELS[status].toLowerCase()}.`);
       return;
     }
-    const result = c.addProgress(safeTaskId, targetId || null, trimmed);
-    if (!result.ok) {
-      setError(result.message);
-      return;
+    if (trimmed) {
+      const result = c.addProgress(safeTaskId, targetId || null, trimmed);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
     }
     setProgressSaved(true);
     if (wantsStatus) {
@@ -156,7 +158,8 @@ export function UpdateProgressDialog({ c }: { c: WorkLogController }) {
           </fieldset>
 
           <label className="block text-xs font-semibold text-[#53506B]">
-            Progress update
+            Progress update{" "}
+            <span className="font-normal text-[#9A97AD]">(optional if changing status)</span>
             <textarea
               value={body}
               onChange={(event) => setBody(event.target.value)}
