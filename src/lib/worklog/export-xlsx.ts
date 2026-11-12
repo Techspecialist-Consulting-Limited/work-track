@@ -35,9 +35,24 @@ function entryRow(db: WorkLogDatabase, e: WorkEntry) {
   const subtask = e.subtaskId ? db.subtasks.find((s) => s.id === e.subtaskId) : undefined;
   const project = task?.projectId ? db.projects.find((p) => p.id === task.projectId) : undefined;
   const team = task?.teamId ? db.teams.find((t) => t.id === task.teamId) : undefined;
+  const clientCategory = e.clientCategoryId
+    ? db.clientCategories.find((row) => row.id === e.clientCategoryId)
+    : undefined;
+  const clientSubcategory = e.clientSubcategoryId
+    ? db.clientSubcategories.find((row) => row.id === e.clientSubcategoryId)
+    : undefined;
+  const clientOrg = clientCategory?.clientOrganisationId
+    ? db.organisations.find((org) => org.id === clientCategory.clientOrganisationId)
+    : clientSubcategory?.clientOrganisationId
+      ? db.organisations.find((org) => org.id === clientSubcategory.clientOrganisationId)
+      : undefined;
   return {
     date: formatDateLabel(dateKeyOf(e.startAt)),
     employee: employee?.name ?? e.employeeId,
+    employer: employee?.employerOrganisationName ?? "",
+    client: clientOrg?.name ?? "",
+    category: clientCategory?.name ?? "",
+    subcategory: clientSubcategory?.name ?? "",
     team: team?.name ?? "",
     task: task?.title ?? "",
     project: task ? getTaskProjectName(db, task) : "",
@@ -66,10 +81,27 @@ function teamEmployeeIds(db: WorkLogDatabase, filter: RangeFilter): Set<Employee
   return new Set(db.employeeTeams.filter((row) => row.teamId === filter.teamId).map((row) => row.employeeId));
 }
 
+/** Employees matching the organisation filter (employer orgs match employer, client orgs match client). */
+function orgEmployeeIds(db: WorkLogDatabase, filter: RangeFilter): Set<EmployeeId> | null {
+  if (!filter.organisationId || filter.organisationId === "all") return null;
+  const kind = db.organisations.find((org) => org.id === filter.organisationId)?.kind;
+  if (!kind) return new Set();
+  return new Set(
+    db.employees
+      .filter((emp) =>
+        kind === "employer"
+          ? emp.employerOrganisationId === filter.organisationId
+          : emp.clientOrganisationId === filter.organisationId
+      )
+      .map((emp) => emp.id)
+  );
+}
+
 /** Builds the six-sheet work log workbook. All figures come from the same stored data the UI reads. */
 export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFilter): Promise<ExcelJS.Workbook> {
   const entries = filterEntries(db, filter);
   const teamMembers = teamEmployeeIds(db, filter);
+  const orgMembers = orgEmployeeIds(db, filter);
   const workbook = new ExcelJS.Workbook();
   workbook.created = new Date();
 
@@ -77,18 +109,18 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   const logSheet = workbook.addWorksheet("Work Log");
   styleSheet(
     logSheet,
-    ["Date", "Employee", "Team", "Project", "Project description", "Subtask", "Work performed", "Start", "End", "Location", "Status", "Duration (h)", "Overtime (h)", "Reported overtime", "Evidence"],
-    [14, 20, 18, 30, 30, 24, 40, 8, 8, 12, 14, 12, 13, 17, 30]
+    ["Date", "Employee", "Employer", "Client", "Category", "Subcategory", "Team", "Project", "Project description", "Subtask", "Work performed", "Start", "End", "Location", "Status", "Duration (h)", "Overtime (h)", "Reported overtime", "Evidence"],
+    [14, 20, 24, 22, 20, 22, 18, 30, 30, 24, 40, 8, 8, 12, 14, 12, 13, 17, 30]
   );
   const logEntries = [...entries].sort((a, b) =>
     a.employeeId === b.employeeId ? a.startAt.localeCompare(b.startAt) : a.employeeId.localeCompare(b.employeeId)
   );
   for (const e of logEntries) {
     const r = entryRow(db, e);
-    logSheet.addRow([r.date, r.employee, r.team, r.project, r.projectDescription, r.subtask, r.description, r.start, r.end, r.location, r.taskStatus, r.durationHours, r.overtimeHours, r.reportedOvertime, r.evidence]);
+    logSheet.addRow([r.date, r.employee, r.employer, r.client, r.category, r.subcategory, r.team, r.project, r.projectDescription, r.subtask, r.description, r.start, r.end, r.location, r.taskStatus, r.durationHours, r.overtimeHours, r.reportedOvertime, r.evidence]);
   }
-  logSheet.getColumn(8).numFmt = "hh:mm";
-  logSheet.getColumn(9).numFmt = "hh:mm";
+  logSheet.getColumn(12).numFmt = "hh:mm";
+  logSheet.getColumn(13).numFmt = "hh:mm";
 
   // 2. Tasks
   const tasksSheet = workbook.addWorksheet("Tasks");
@@ -102,6 +134,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   for (const t of db.tasks) {
     if (filter.employeeId && filter.employeeId !== "all" && t.employeeId !== filter.employeeId) continue;
     if (filter.teamId && filter.teamId !== "all" && t.teamId !== filter.teamId) continue;
+    if (orgMembers && !orgMembers.has(t.employeeId)) continue;
     if (filter.employeeId && filter.employeeId !== "all" && !includedTaskIds.has(t.id)) continue;
     tasksSheet.addRow([
       employeeName(t.employeeId),
@@ -128,6 +161,7 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
   for (const emp of db.employees) {
     if (filter.employeeId && filter.employeeId !== "all" && filter.employeeId !== emp.id) continue;
     if (teamMembers && !teamMembers.has(emp.id)) continue;
+    if (orgMembers && !orgMembers.has(emp.id)) continue;
     const mine = entries.filter((e) => e.employeeId === emp.id);
     const total = mine.reduce((s, e) => s + durationMinutes(e.startAt, e.endAt), 0);
     const normal = mine.reduce((s, e) => s + e.normalMinutes, 0);
@@ -163,6 +197,10 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
     if (key < filter.fromKey || key > filter.toKey) continue;
     if (filter.employeeId && filter.employeeId !== "all" && b.employeeId !== filter.employeeId) continue;
     if (teamMembers && !teamMembers.has(b.employeeId)) continue;
+    if (orgMembers && !orgMembers.has(b.employeeId)) continue;
+    // Breaks carry no client category, so catalogue filters exclude them.
+    if ((filter.clientCategoryId && filter.clientCategoryId !== "all") ||
+        (filter.clientSubcategoryId && filter.clientSubcategoryId !== "all")) continue;
     breaksSheet.addRow([
       formatDateLabel(key),
       employeeName(b.employeeId),
@@ -177,13 +215,13 @@ export async function buildWorkLogWorkbook(db: WorkLogDatabase, filter: RangeFil
 
   // 5. Overtime
   const overtimeSheet = workbook.addWorksheet("Overtime");
-  styleSheet(overtimeSheet, ["Work entry ID", "Date", "Employee", "Project", "Start", "End", "Overtime (h)", "Reported manually"], [30, 14, 20, 30, 19, 19, 13, 18]);
+  styleSheet(overtimeSheet, ["Work entry ID", "Date", "Employee", "Project", "Client", "Category", "Subcategory", "Start", "End", "Overtime (h)", "Reported manually"], [30, 14, 20, 30, 22, 20, 22, 19, 19, 13, 18]);
   for (const e of entries.filter((x) => x.overtimeMinutes > 0)) {
     const r = entryRow(db, e);
-    overtimeSheet.addRow([e.id, r.date, r.employee, r.project, r.start, r.end, r.overtimeHours, r.reportedOvertime]);
+    overtimeSheet.addRow([e.id, r.date, r.employee, r.project, r.client, r.category, r.subcategory, r.start, r.end, r.overtimeHours, r.reportedOvertime]);
   }
-  overtimeSheet.getColumn(5).numFmt = "yyyy-mm-dd hh:mm";
-  overtimeSheet.getColumn(6).numFmt = "yyyy-mm-dd hh:mm";
+  overtimeSheet.getColumn(8).numFmt = "yyyy-mm-dd hh:mm";
+  overtimeSheet.getColumn(9).numFmt = "yyyy-mm-dd hh:mm";
 
   // 6. Work Location Comparison
   const locationSheet = workbook.addWorksheet("Work Location Comparison");

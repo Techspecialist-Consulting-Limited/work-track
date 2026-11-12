@@ -20,6 +20,8 @@ import {
   selectTeam,
   startBreak,
   subscribeToDatabase,
+  suggestClientCategory,
+  suggestClientSubcategory,
   updateBreak,
   updateSubtask,
   updateSubtaskStatus,
@@ -41,6 +43,7 @@ import {
   getTeamsForEmployee,
 } from "@/lib/worklog/selectors";
 import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib/worklog/types";
+import { entryReportKind, isSelectableForEntry } from "@/lib/worklog/client-catalogue";
 import {
   getTaskStatusCounts,
   makeWorkSlots,
@@ -93,11 +96,20 @@ export function useWorkLogController() {
   const [recordsOpen, setRecordsOpen] = useState(false);
   const [recordsTab, setRecordsTab] = useState<"log" | "summary">("log");
   const [recordsDate, setRecordsDate] = useState("");
+  const [tasksDate, setTasksDate] = useState("");
   const [exportFrom, setExportFrom] = useState("");
   const [exportTo, setExportTo] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [clientCategoryId, setClientCategoryId] = useState("");
+  const [clientSubcategoryId, setClientSubcategoryId] = useState("");
+  /** Which form an in-progress edit uses — follows the entry, not the current arrangement. */
+  const [editEntryKind, setEditEntryKind] = useState<"in_house" | "client_site" | null>(null);
+  const [suggestKind, setSuggestKind] = useState<"category" | "subcategory" | null>(null);
+  const [suggestName, setSuggestName] = useState("");
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
   const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
   const [taskDetailsTaskId, setTaskDetailsTaskId] = useState<string | null>(null);
   const [progressUpdateTaskId, setProgressUpdateTaskId] = useState<string | null>(null);
@@ -111,6 +123,27 @@ export function useWorkLogController() {
 
   const todayKey = getZonedDateKey(now);
   const recordsDateKey = recordsDate || todayKey;
+  const tasksDateKey = tasksDate || todayKey;
+  const dayTaskEntries = useMemo(
+    () =>
+      db.entries.filter(
+        (entry) => entry.employeeId === meId && dateKeyOf(entry.startAt) === tasksDateKey
+      ),
+    [db.entries, meId, tasksDateKey]
+  );
+  const dayTaskIds = useMemo(
+    () => new Set(dayTaskEntries.map((entry) => entry.taskId).filter((id): id is string => id != null)),
+    [dayTaskEntries]
+  );
+  const dayTaskFirstStart = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of dayTaskEntries) {
+      if (!entry.taskId) continue;
+      const current = map.get(entry.taskId);
+      if (!current || entry.startAt < current) map.set(entry.taskId, entry.startAt);
+    }
+    return map;
+  }, [dayTaskEntries]);
   const summary = useMemo(
     () => getDaySummary(db, meId, todayKey, now),
     [db, meId, todayKey, now]
@@ -119,7 +152,10 @@ export function useWorkLogController() {
     () => getDaySummary(db, meId, recordsDateKey, now),
     [db, meId, recordsDateKey, now]
   );
-  const taskIdsWithEntries = useMemo(() => new Set(db.entries.map((entry) => entry.taskId)), [db.entries]);
+  const taskIdsWithEntries = useMemo(
+    () => new Set(db.entries.map((entry) => entry.taskId).filter((id): id is string => id != null)),
+    [db.entries]
+  );
   const openTasks = openTasksWithEntries(db, meId);
   const employeeTasks = useMemo(
     () =>
@@ -129,6 +165,32 @@ export function useWorkLogController() {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [db.tasks, meId, taskIdsWithEntries]
   );
+  const tasksForDay = useMemo(
+    () =>
+      employeeTasks
+        .filter((task) => dayTaskIds.has(task.id))
+        .slice()
+        .sort((a, b) => (dayTaskFirstStart.get(a.id) ?? "").localeCompare(dayTaskFirstStart.get(b.id) ?? "")),
+    [employeeTasks, dayTaskIds, dayTaskFirstStart]
+  );
+  const carriedOverTasks = useMemo(() => {
+    const lastEntryKeyByTask = new Map<string, string>();
+    for (const entry of db.entries) {
+      if (entry.employeeId !== meId || !entry.taskId) continue;
+      const key = dateKeyOf(entry.startAt);
+      const current = lastEntryKeyByTask.get(entry.taskId);
+      if (!current || key > current) lastEntryKeyByTask.set(entry.taskId, key);
+    }
+    return employeeTasks
+      .filter((task) => {
+        if (dayTaskIds.has(task.id)) return false;
+        if (task.currentStatus !== "ongoing" && task.currentStatus !== "blocked") return false;
+        const lastKey = lastEntryKeyByTask.get(task.id);
+        return Boolean(lastKey && lastKey < tasksDateKey);
+      })
+      .map((task) => ({ task, lastEntryKey: lastEntryKeyByTask.get(task.id) ?? "" }))
+      .sort((a, b) => b.lastEntryKey.localeCompare(a.lastEntryKey));
+  }, [db.entries, meId, employeeTasks, dayTaskIds, tasksDateKey]);
   const activeBreak = db.breaks.find((brk) => brk.employeeId === meId && brk.endAt === null) ?? null;
   const teams = useMemo(() => getTeamsForEmployee(db, meId), [db, meId]);
   const activeTeamId = teamChoice || getSessionActiveTeamId() || teams[0]?.id || "";
@@ -230,18 +292,27 @@ export function useWorkLogController() {
     setEditingDateKey(null);
     setSelectedSlot("");
     setLocation("office");
+    setClientCategoryId("");
+    setClientSubcategoryId("");
+    setEditEntryKind(null);
+    setSuggestKind(null);
+    setSuggestName("");
+    setSuggestError(null);
     setError(null);
   }
 
   function beginEdit(entry: WorkEntry) {
     const dayKey = dateKeyOf(entry.startAt);
-    const task = getTaskById(getDatabaseSnapshot(), entry.taskId);
+    const task = entry.taskId ? getTaskById(getDatabaseSnapshot(), entry.taskId) : undefined;
     setEditingId(entry.id);
     setEditingDateKey(dayKey);
     if (task?.teamId) setTeamChoice(task.teamId);
     setProjectChoice(task?.projectId ?? "");
     setProjectSearch("");
     setActivityChoice(entry.subtaskId ?? "");
+    setClientCategoryId(entry.clientCategoryId ?? "");
+    setClientSubcategoryId(entry.clientSubcategoryId ?? "");
+    setEditEntryKind(entryReportKind(entry));
     setNewSubtaskTitle("");
     setDescription(entry.description);
     setStartTime(formatTime(entry.startAt));
@@ -415,6 +486,10 @@ export function useWorkLogController() {
       setError("Choose a valid time period. The end must be after the start.");
       return;
     }
+    if (formIsClientSite) {
+      submitClientEntry();
+      return;
+    }
     if (!editingId && !activeTeamId) {
       setError("Choose a team before saving your work.");
       return;
@@ -462,6 +537,80 @@ export function useWorkLogController() {
 
     setNotice(editingId ? "Work entry updated." : "Work entry saved.");
     resetForm();
+  }
+
+  function submitClientEntry() {
+    if (!clientCategoryId) {
+      setError("Choose a category for this client work.");
+      return;
+    }
+    if (!clientSubcategoryId) {
+      setError("Choose a subcategory for this client work.");
+      return;
+    }
+    if (!description.trim()) {
+      setError("Describe what you worked on for this client entry.");
+      return;
+    }
+    const input: EntryInput = {
+      employeeId: meId,
+      clientCategoryId,
+      clientSubcategoryId,
+      description,
+      startAt: toLagosIso(effectiveDateKey, startTime),
+      endAt: toLagosIso(effectiveDateKey, endTime),
+      workLocation: location,
+      evidenceLink: evidenceLink || undefined,
+      isReportedOvertime,
+    };
+    const result = editingId ? editWorkEntry(editingId, input) : addWorkEntry(input);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setNotice(editingId ? "Work entry updated." : "Work entry saved.");
+    resetForm();
+  }
+
+  function chooseClientCategory(categoryId: string) {
+    setClientCategoryId(categoryId);
+    setClientSubcategoryId("");
+    setError(null);
+  }
+
+  function openSuggestion(kind: "category" | "subcategory") {
+    setSuggestKind(kind);
+    setSuggestName("");
+    setSuggestError(null);
+  }
+
+  async function submitSuggestion() {
+    if (suggesting || !suggestKind) return;
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const name = suggestName.trim();
+      const result =
+        suggestKind === "category"
+          ? await suggestClientCategory(name)
+          : clientCategoryId
+            ? await suggestClientSubcategory({ categoryId: clientCategoryId, name })
+            : { ok: false as const, message: "Choose a category before suggesting a subcategory." };
+      if (!result || result.ok === false) {
+        setSuggestError(result?.message ?? "Could not send the suggestion. Try again.");
+        return;
+      }
+      if (suggestKind === "category" && result.clientCategoryId) {
+        chooseClientCategory(result.clientCategoryId);
+      } else if (suggestKind === "subcategory" && result.clientSubcategoryId) {
+        setClientSubcategoryId(result.clientSubcategoryId);
+      }
+      setSuggestKind(null);
+      setSuggestName("");
+      setNotice("Suggestion sent — you can use it now; an admin will review it.");
+    } finally {
+      setSuggesting(false);
+    }
   }
 
   function deleteEntry(entryId: string) {
@@ -634,6 +783,67 @@ export function useWorkLogController() {
   const progressBreakWidth = (progressBreak / SCHEDULED_MINUTES) * 100;
   const progressRemainingWidth = (remainingMinutes / SCHEDULED_MINUTES) * 100;
   const employee = db.employees.find((item) => item.id === meId);
+  const isClientSite = employee?.workArrangement === "client_site";
+  const clientOrgId = employee?.clientOrganisationId;
+  const clientOrgName = employee?.clientOrganisationName;
+  const editingEntry = editingId ? db.entries.find((entry) => entry.id === editingId) : undefined;
+  // New entries follow the current arrangement; edits follow the entry's own
+  // reporting kind so historical records always reopen in their original form.
+  const formIsClientSite = editingId ? editEntryKind === "client_site" : isClientSite;
+  // A client-site edit is scoped to the entry's original client — which may
+  // differ from the employee's current assignment after a reassignment.
+  const editClientOrgId = editingEntry?.clientCategoryId
+    ? db.clientCategories.find((row) => row.id === editingEntry.clientCategoryId)?.clientOrganisationId
+    : editingEntry?.clientSubcategoryId
+      ? db.clientSubcategories.find((row) => row.id === editingEntry.clientSubcategoryId)?.clientOrganisationId
+      : undefined;
+  const formClientOrgId = formIsClientSite
+    ? editingId
+      ? (editClientOrgId ?? clientOrgId)
+      : clientOrgId
+    : undefined;
+  const formClientOrgName = formClientOrgId
+    ? (db.organisations.find((org) => org.id === formClientOrgId)?.name ?? clientOrgName)
+    : clientOrgName;
+  const clientCategories = useMemo(
+    () =>
+      formClientOrgId
+        ? db.clientCategories.filter(
+            (row) =>
+              row.clientOrganisationId === formClientOrgId &&
+              isSelectableForEntry(row, meId)
+          )
+        : [],
+    [db.clientCategories, formClientOrgId, meId]
+  );
+  const clientSubcategories = useMemo(
+    () =>
+      clientCategoryId && formClientOrgId
+        ? db.clientSubcategories.filter(
+            (row) =>
+              row.categoryId === clientCategoryId &&
+              row.clientOrganisationId === formClientOrgId &&
+              isSelectableForEntry(row, meId)
+          )
+        : [],
+    [db.clientSubcategories, clientCategoryId, formClientOrgId, meId]
+  );
+  const categoryOptions = useMemo(() => {
+    const rows = [...clientCategories];
+    if (editingEntry?.clientCategoryId) {
+      const current = db.clientCategories.find((row) => row.id === editingEntry.clientCategoryId);
+      if (current && !rows.some((row) => row.id === current.id)) rows.push(current);
+    }
+    return rows;
+  }, [clientCategories, db.clientCategories, editingEntry]);
+  const subcategoryOptions = useMemo(() => {
+    const rows = [...clientSubcategories];
+    if (editingEntry?.clientSubcategoryId) {
+      const current = db.clientSubcategories.find((row) => row.id === editingEntry.clientSubcategoryId);
+      if (current && !rows.some((row) => row.id === current.id)) rows.push(current);
+    }
+    return rows;
+  }, [clientSubcategories, db.clientSubcategories, editingEntry]);
   const initials = employee?.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase() ?? "WT";
   const dateEntries = recordsSummary.entries;
   const taskStatusCounts = getTaskStatusCounts(db.tasks, dateEntries);
@@ -722,6 +932,11 @@ export function useWorkLogController() {
     setRecordsTab,
     recordsDate,
     setRecordsDate,
+    tasksDate,
+    setTasksDate,
+    tasksDateKey,
+    tasksForDay,
+    carriedOverTasks,
     exportFrom,
     setExportFrom,
     exportTo,
@@ -729,6 +944,26 @@ export function useWorkLogController() {
     exportError,
     exporting,
     submitting,
+    isClientSite,
+    formIsClientSite,
+    formClientOrgId,
+    formClientOrgName,
+    clientOrgId,
+    clientOrgName,
+    clientCategoryOptions: categoryOptions,
+    clientSubcategoryOptions: subcategoryOptions,
+    clientCategoryId,
+    chooseClientCategory,
+    clientSubcategoryId,
+    setClientSubcategoryId,
+    suggestKind,
+    setSuggestKind,
+    suggestName,
+    setSuggestName,
+    suggestError,
+    suggesting,
+    openSuggestion,
+    submitSuggestion,
     formRef,
     effectiveDateKey,
     workdayStatus,

@@ -12,6 +12,7 @@ import {
   type ValidationResult,
 } from "./validation";
 import { checkParentCanBeDone, checkSubtaskStatusChange, nextCompletedAt } from "./status-rules";
+import { isSelectableForEntry } from "./client-catalogue";
 import type {
   BreakEntry,
   EmployeeId,
@@ -40,6 +41,9 @@ function queueAfter(taskId: string | undefined, send: () => void) {
 const EMPTY_DB: WorkLogDatabase = {
   version: 2,
   employees: [],
+  organisations: [],
+  clientCategories: [],
+  clientSubcategories: [],
   teams: [],
   employeeTeams: [],
   projects: [],
@@ -78,6 +82,9 @@ function isDatabase(value: unknown): value is WorkLogDatabase {
   return (
     db.version === 2 &&
     Array.isArray(db.employees) &&
+    Array.isArray(db.organisations) &&
+    Array.isArray(db.clientCategories) &&
+    Array.isArray(db.clientSubcategories) &&
     Array.isArray(db.teams) &&
     Array.isArray(db.employeeTeams) &&
     Array.isArray(db.projects) &&
@@ -213,6 +220,9 @@ interface SyncResponse {
   projectId?: string;
   duplicateProjectId?: string;
   duplicateProjectName?: string;
+  organisationId?: string;
+  clientCategoryId?: string;
+  clientSubcategoryId?: string;
 }
 
 async function syncAction(action: string, payload: Record<string, unknown>): Promise<SyncResponse | null> {
@@ -241,9 +251,12 @@ export type MutationResult = { ok: true } | { ok: false; message: string };
 
 export interface EntryInput {
   employeeId: EmployeeId;
-  taskId: string;
+  /** In-house entries are task-linked; client-site entries omit taskId and carry the client pair. */
+  taskId?: string;
   /** Optional subtask that belongs to the selected task. */
   subtaskId?: string | null;
+  clientCategoryId?: string;
+  clientSubcategoryId?: string;
   description: string;
   startAt: string;
   endAt: string;
@@ -295,25 +308,78 @@ function subtaskBelongsTo(db: WorkLogDatabase, taskId: string, subtaskId?: strin
   return { ok: true };
 }
 
+/**
+ * Client-site entries reference the employee's assigned client catalogue.
+ * The pair must belong together, belong to that client, and be selectable
+ * (approved+active, or the employee's own pending suggestion).
+ */
+function clientPairCheck(
+  db: WorkLogDatabase,
+  employeeId: string,
+  input: EntryInput,
+  /** Edits are scoped to the entry's original client, which may differ from the current assignment. */
+  allowedClientOrgId?: string
+): { ok: true; categoryId: string; subcategoryId: string } | { ok: false; message: string } {
+  const fail = { ok: false as const, message: "Choose a category and subcategory from your client's list." };
+  if (!input.clientCategoryId || !input.clientSubcategoryId) return fail;
+  const employee = db.employees.find((item) => item.id === employeeId);
+  if (!employee) return { ok: false, message: "Your account is not assigned to a client." };
+  const orgId =
+    allowedClientOrgId ??
+    (employee.workArrangement === "client_site" ? employee.clientOrganisationId : undefined);
+  if (!orgId) {
+    return { ok: false, message: "Your account is not assigned to a client." };
+  }
+  const category = db.clientCategories.find((item) => item.id === input.clientCategoryId);
+  const subcategory = db.clientSubcategories.find((item) => item.id === input.clientSubcategoryId);
+  if (
+    !category ||
+    !subcategory ||
+    category.clientOrganisationId !== orgId ||
+    subcategory.clientOrganisationId !== orgId ||
+    subcategory.categoryId !== category.id ||
+    !isSelectableForEntry(category, employeeId) ||
+    !isSelectableForEntry(subcategory, employeeId)
+  ) {
+    return fail;
+  }
+  return { ok: true, categoryId: category.id, subcategoryId: subcategory.id };
+}
+
 export function addWorkEntry(input: EntryInput): MutationResult {
   const db = getDatabaseSnapshot();
   const check = checkEntryInput(db, input);
   if (!check.ok) return check;
-  const task = db.tasks.find((t) => t.id === input.taskId && t.employeeId === input.employeeId);
-  if (!task) return { ok: false, message: "Choose a task first." };
-  if (task.currentStatus === "done" || task.currentStatus === "dropped") {
-    return { ok: false, message: "This task is closed. Start a new task or continue an open one." };
+  const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
+  let task: Task | undefined;
+  let clientPair: { categoryId: string; subcategoryId: string } | undefined;
+  if (isClientEntry) {
+    const pair = clientPairCheck(db, input.employeeId, input);
+    if (!pair.ok) return pair;
+    clientPair = pair;
+    if (input.taskId || input.subtaskId) {
+      return { ok: false, message: "Client-site entries cannot be linked to a task." };
+    }
+  } else {
+    if (!input.taskId) return { ok: false, message: "Choose a task first." };
+    task = db.tasks.find((t) => t.id === input.taskId && t.employeeId === input.employeeId);
+    if (!task) return { ok: false, message: "Choose a task first." };
+    if (task.currentStatus === "done" || task.currentStatus === "dropped") {
+      return { ok: false, message: "This task is closed. Start a new task or continue an open one." };
+    }
+    const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
+    if (!belongs.ok) return belongs;
   }
-  const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
-  if (!belongs.ok) return belongs;
 
   const split = splitFor(input);
   const id = newId();
   const entry: WorkEntry = {
     id,
     employeeId: input.employeeId,
-    taskId: task.id,
+    taskId: task?.id,
     subtaskId: input.subtaskId?.trim() || undefined,
+    clientCategoryId: clientPair?.categoryId,
+    clientSubcategoryId: clientPair?.subcategoryId,
     description: input.description.trim(),
     startAt: input.startAt,
     endAt: input.endAt,
@@ -326,7 +392,7 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     revisions: [],
   };
   emit({ ...db, entries: [...db.entries, entry] });
-  queueAfter(input.taskId, () => void syncAction("addEntry", { id, input }));
+  queueAfter(task?.id, () => void syncAction("addEntry", { id, input }));
   return { ok: true };
 }
 
@@ -336,20 +402,61 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
   if (!existing) return { ok: false, message: "This entry no longer exists." };
   const check = checkEntryInput(db, input, entryId);
   if (!check.ok) return check;
-  const task = db.tasks.find((t) => t.id === input.taskId && t.employeeId === input.employeeId);
-  if (!task) return { ok: false, message: "Choose a task that belongs to you." };
-  // Corrections keep an entry on its closed task, but never move it to another closed task.
-  if ((task.currentStatus === "done" || task.currentStatus === "dropped") && existing.taskId !== task.id) {
-    return { ok: false, message: "This task is closed. Reopen it or choose an open task." };
+  const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
+  const wasClientEntry = Boolean(existing.clientCategoryId || existing.clientSubcategoryId);
+  if (isClientEntry !== wasClientEntry) {
+    return { ok: false, message: "This entry cannot switch between task and client-site reporting." };
   }
-  const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
-  if (!belongs.ok) return belongs;
+  let task: Task | undefined;
+  let clientPair: { categoryId: string; subcategoryId: string } | undefined;
+  if (isClientEntry) {
+    // Edits stay within the entry's original client organisation, even if the
+    // employee has since been reassigned — the client can never be switched
+    // through the entry-editing interface.
+    const existingOrgId = existing.clientCategoryId
+      ? db.clientCategories.find((row) => row.id === existing.clientCategoryId)?.clientOrganisationId
+      : existing.clientSubcategoryId
+        ? db.clientSubcategories.find((row) => row.id === existing.clientSubcategoryId)?.clientOrganisationId
+        : undefined;
+    const pair = existingOrgId
+      ? clientPairCheck(db, input.employeeId, input, existingOrgId)
+      : ({ ok: false, message: "Choose a category and subcategory from your client's list." } as const);
+    if (!pair.ok) {
+      // Editing may keep the entry's existing pair even when it is no longer
+      // selectable for new entries (e.g. a since-rejected suggestion) — the
+      // historical reference is preserved rather than silently replaced.
+      const keepExisting =
+        input.clientCategoryId === existing.clientCategoryId &&
+        input.clientSubcategoryId === existing.clientSubcategoryId &&
+        existing.clientCategoryId &&
+        existing.clientSubcategoryId;
+      if (!keepExisting || !existing.clientCategoryId || !existing.clientSubcategoryId) return pair;
+      clientPair = { categoryId: existing.clientCategoryId, subcategoryId: existing.clientSubcategoryId };
+    } else {
+      clientPair = pair;
+    }
+    if (input.taskId || input.subtaskId) {
+      return { ok: false, message: "Client-site entries cannot be linked to a task." };
+    }
+  } else {
+    if (!input.taskId) return { ok: false, message: "Choose a task that belongs to you." };
+    task = db.tasks.find((t) => t.id === input.taskId && t.employeeId === input.employeeId);
+    if (!task) return { ok: false, message: "Choose a task that belongs to you." };
+    // Corrections keep an entry on its closed task, but never move it to another closed task.
+    if ((task.currentStatus === "done" || task.currentStatus === "dropped") && existing.taskId !== task.id) {
+      return { ok: false, message: "This task is closed. Reopen it or choose an open task." };
+    }
+    const belongs = subtaskBelongsTo(db, task.id, input.subtaskId);
+    if (!belongs.ok) return belongs;
+  }
 
   const split = splitFor(input);
   const updated: WorkEntry = {
     ...existing,
-    taskId: task.id,
-    subtaskId: input.subtaskId?.trim() || undefined,
+    taskId: task?.id,
+    subtaskId: isClientEntry ? undefined : input.subtaskId?.trim() || undefined,
+    clientCategoryId: clientPair?.categoryId,
+    clientSubcategoryId: clientPair?.subcategoryId,
     description: input.description.trim(),
     startAt: input.startAt,
     endAt: input.endAt,
@@ -897,6 +1004,84 @@ export function archiveTeamProject(projectId: string, archived: boolean): Promis
 
 export function promoteTeamProject(projectId: string): Promise<SyncResponse | null> {
   return syncAction("promoteTeamProject", { projectId });
+}
+
+/* ------------------- client-site reporting configuration ------------------- */
+
+export function createClientOrganisation(input: {
+  name: string;
+  description?: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("createClientOrganisation", { id: newId(), ...input });
+}
+
+export function updateOrganisation(input: {
+  organisationId: string;
+  name?: string;
+  description?: string | null;
+  isActive?: boolean;
+}): Promise<SyncResponse | null> {
+  return syncAction("updateOrganisation", input);
+}
+
+export function assignEmployeeClient(input: {
+  employeeId: string;
+  workArrangement: "in_house" | "client_site";
+  clientOrganisationId?: string | null;
+}): Promise<SyncResponse | null> {
+  return syncAction("assignEmployeeClient", input);
+}
+
+export function createClientCategory(input: {
+  clientOrganisationId: string;
+  name: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("createClientCategory", { id: newId(), ...input });
+}
+
+export function updateClientCategory(input: {
+  categoryId: string;
+  name?: string;
+  isActive?: boolean;
+}): Promise<SyncResponse | null> {
+  return syncAction("updateClientCategory", input);
+}
+
+export function createClientSubcategory(input: {
+  categoryId: string;
+  name: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("createClientSubcategory", { id: newId(), ...input });
+}
+
+export function updateClientSubcategory(input: {
+  subcategoryId: string;
+  name?: string;
+  isActive?: boolean;
+}): Promise<SyncResponse | null> {
+  return syncAction("updateClientSubcategory", input);
+}
+
+export function reviewClientSuggestion(input: {
+  itemKind: "category" | "subcategory";
+  id: string;
+  decision: "approve" | "reject";
+  name?: string;
+  note?: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("reviewClientSuggestion", input);
+}
+
+/** Staff-facing suggestions (used by the client-site form in Phase 4). */
+export function suggestClientCategory(name: string): Promise<SyncResponse | null> {
+  return syncAction("suggestClientCategory", { id: newId(), name });
+}
+
+export function suggestClientSubcategory(input: {
+  categoryId: string;
+  name: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("suggestClientSubcategory", { id: newId(), ...input });
 }
 
 /** Convenience for pickers: active categories from the snapshot. */

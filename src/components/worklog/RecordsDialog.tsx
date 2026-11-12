@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Coffee, Pencil, Save, Trash2, X } from "lucide-react";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
-import { getSubtaskById, getTaskById } from "@/lib/worklog/selectors";
+import { getEntryLabel, getSubtaskById, getTaskById } from "@/lib/worklog/selectors";
 import { dateKeyAfter } from "./shared";
 import { StatusBadge } from "./StatusBadge";
 import type { WorkLogController } from "./useWorkLogController";
@@ -127,7 +127,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                             {formatTime(item.entry.startAt)} – {formatTime(item.entry.endAt)}
                           </p>
                           <p className="mt-0.5 break-words text-[13px] font-semibold text-[#17172F]">
-                            {getTaskById(c.db, item.entry.taskId)?.title ?? "Task"}
+                            {getEntryLabel(c.db, item.entry)}
                           </p>
                           {item.entry.subtaskId ? (
                             <p className="text-[11px] font-medium text-[#777A91]">
@@ -136,8 +136,13 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                           ) : null}
                           <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-4 text-[#53506B]">{item.entry.description.trim() || "—"}</p>
                           <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-[#777A91]">
-                            {WORK_LOCATION_LABELS[item.entry.workLocation]} · Task status{" "}
-                            <StatusBadge status={getTaskById(c.db, item.entry.taskId)?.currentStatus ?? "ongoing"} />
+                            {WORK_LOCATION_LABELS[item.entry.workLocation]}
+                            {item.entry.taskId ? (
+                              <>
+                                {" "}· Task status{" "}
+                                <StatusBadge status={getTaskById(c.db, item.entry.taskId)?.currentStatus ?? "ongoing"} />
+                              </>
+                            ) : null}
                             {item.entry.overtimeMinutes > 0 ? ` · Overtime ${formatMinutes(item.entry.overtimeMinutes)}` : ""}
                             {item.entry.isReportedOvertime ? " · Reported overtime" : ""}
                           </p>
@@ -168,7 +173,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                           <span className="flex shrink-0 items-center gap-0.5">
                             <button
                               type="button"
-                              aria-label={`Edit ${getTaskById(c.db, item.entry.taskId)?.title ?? "work entry"}`}
+                              aria-label={`Edit ${getEntryLabel(c.db, item.entry)}`}
                               onClick={() => c.beginEdit(item.entry)}
                               className="grid h-9 w-9 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#F5F1FF] hover:text-[#5A3ED0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
                             >
@@ -176,7 +181,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                             </button>
                             <button
                               type="button"
-                              aria-label={`Delete ${getTaskById(c.db, item.entry.taskId)?.title ?? "work entry"}`}
+                              aria-label={`Delete ${getEntryLabel(c.db, item.entry)}`}
                               onClick={() => setConfirmDeleteId(item.entry.id)}
                               className="grid h-9 w-9 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#FDECEC] hover:text-[#B42318] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B42318]"
                             >
@@ -312,7 +317,7 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                           {formatTime(item.entry.startAt)}–{formatTime(item.entry.endAt)}
                         </p>
                         <p className="mt-0.5 text-sm font-medium text-[#39364F]">
-                          {getTaskById(c.db, item.entry.taskId)?.title ?? "Task"}
+                          {getEntryLabel(c.db, item.entry)}
                         </p>
                       </li>
                     ) : (

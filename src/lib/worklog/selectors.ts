@@ -158,6 +158,19 @@ export function getSubtaskById(db: WorkLogDatabase, subtaskId: string) {
   return db.subtasks.find((subtask) => subtask.id === subtaskId);
 }
 
+/** Display label for a work entry: task title for in-house, client subcategory for client-site. */
+export function getEntryLabel(db: WorkLogDatabase, entry: WorkEntry): string {
+  if (entry.taskId) return getTaskById(db, entry.taskId)?.title ?? "Task";
+  const subcategory = entry.clientSubcategoryId
+    ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+    : undefined;
+  if (subcategory) return subcategory.name;
+  const category = entry.clientCategoryId
+    ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+    : undefined;
+  return category?.name ?? "Client work";
+}
+
 export function getEmployee(db: WorkLogDatabase, employeeId: EmployeeId): Employee | undefined {
   return db.employees.find((e) => e.id === employeeId);
 }
@@ -203,19 +216,66 @@ export interface RangeFilter {
   /** Filter by the task's current status (work entries do not own status). */
   taskStatus?: Task["currentStatus"] | "all";
   hours?: "all" | "normal" | "overtime";
+  /** Employer or client organisation; matches either side of the employee's assignments. */
+  organisationId?: string | "all";
+  /** Client-site catalogue filters; only client-site entries carry these. */
+  clientCategoryId?: string | "all";
+  clientSubcategoryId?: string | "all";
 }
 
 export function filterEntries(db: WorkLogDatabase, filter: RangeFilter): WorkEntry[] {
   const taskStatuses = new Map(db.tasks.map((task) => [task.id, task.currentStatus]));
   const taskTeams = new Map(db.tasks.map((task) => [task.id, task.teamId]));
+  const employeeTeamIds = new Map<string, Set<string>>();
+  for (const row of db.employeeTeams) {
+    const set = employeeTeamIds.get(row.employeeId) ?? new Set<string>();
+    set.add(row.teamId);
+    employeeTeamIds.set(row.employeeId, set);
+  }
+  // Organisation filter: employer orgs match employerOrganisationId, client
+  // orgs match clientOrganisationId — an employee deployed to a client matches
+  // both their employer and that client.
+  const orgKind = filter.organisationId && filter.organisationId !== "all"
+    ? db.organisations.find((org) => org.id === filter.organisationId)?.kind
+    : undefined;
+  const orgEmployeeIds = orgKind
+    ? new Set(
+        db.employees
+          .filter((emp) =>
+            orgKind === "employer"
+              ? emp.employerOrganisationId === filter.organisationId
+              : emp.clientOrganisationId === filter.organisationId
+          )
+          .map((emp) => emp.id)
+      )
+    : null;
   return db.entries
     .filter((e) => {
       const key = dateKeyOf(e.startAt);
       if (key < filter.fromKey || key > filter.toKey) return false;
       if (filter.employeeId && filter.employeeId !== "all" && e.employeeId !== filter.employeeId) return false;
-      if (filter.teamId && filter.teamId !== "all" && taskTeams.get(e.taskId) !== filter.teamId) return false;
+      if (orgEmployeeIds && !orgEmployeeIds.has(e.employeeId)) return false;
+      // Team filter matches the task's team for in-house entries; client-site
+      // entries have no task, so they match on the employee's team membership.
+      if (filter.teamId && filter.teamId !== "all") {
+        const matches = e.taskId
+          ? taskTeams.get(e.taskId) === filter.teamId
+          : employeeTeamIds.get(e.employeeId)?.has(filter.teamId);
+        if (!matches) return false;
+      }
       if (filter.location && filter.location !== "all" && e.workLocation !== filter.location) return false;
-      if (filter.taskStatus && filter.taskStatus !== "all" && taskStatuses.get(e.taskId) !== filter.taskStatus) return false;
+      // Task-status is a task attribute: it narrows task-linked entries only.
+      // Client-site entries carry no task status and are not removed by it.
+      if (
+        filter.taskStatus &&
+        filter.taskStatus !== "all" &&
+        e.taskId &&
+        taskStatuses.get(e.taskId) !== filter.taskStatus
+      ) {
+        return false;
+      }
+      if (filter.clientCategoryId && filter.clientCategoryId !== "all" && e.clientCategoryId !== filter.clientCategoryId) return false;
+      if (filter.clientSubcategoryId && filter.clientSubcategoryId !== "all" && e.clientSubcategoryId !== filter.clientSubcategoryId) return false;
       if (filter.hours === "normal" && e.normalMinutes === 0) return false;
       if (filter.hours === "overtime" && e.overtimeMinutes === 0) return false;
       return true;

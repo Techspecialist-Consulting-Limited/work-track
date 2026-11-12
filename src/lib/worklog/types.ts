@@ -18,12 +18,71 @@ export type ManagementReviewStatus = "accepted" | "needs_changes";
 
 export type ScheduleSegmentKind = "normal" | "overtime";
 
+/** 'in_house' staff report against projects/tasks; 'client_site' staff report against a client catalogue. */
+export type WorkArrangement = "in_house" | "client_site";
+
+export type OrganisationKind = "employer" | "client";
+
+/** Catalogue lifecycle: staff suggestions start 'pending' until an admin reviews them. */
+export type CatalogueApprovalStatus = "approved" | "pending" | "rejected";
+
 export interface Employee {
   id: EmployeeId;
   name: string;
   role: string;
   department: string;
   avatarUrl?: string;
+  workArrangement: WorkArrangement;
+  /** Organisation that employs the employee — never the client site. */
+  employerOrganisationId?: string;
+  employerOrganisationName?: string;
+  /** Client organisation the employee is deployed to; only set for client_site staff. */
+  clientOrganisationId?: string;
+  clientOrganisationName?: string;
+}
+
+export interface Organisation {
+  id: string;
+  name: string;
+  kind: OrganisationKind;
+  description?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientCategory {
+  id: string;
+  clientOrganisationId: string;
+  clientOrganisationName?: string;
+  name: string;
+  approvalStatus: CatalogueApprovalStatus;
+  isActive: boolean;
+  createdByEmployeeId?: EmployeeId;
+  createdByName?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientSubcategory {
+  id: string;
+  clientOrganisationId: string;
+  clientOrganisationName?: string;
+  categoryId: string;
+  categoryName?: string;
+  name: string;
+  approvalStatus: CatalogueApprovalStatus;
+  isActive: boolean;
+  createdByEmployeeId?: EmployeeId;
+  createdByName?: string;
+  reviewedByName?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TaskCategory {
@@ -151,9 +210,16 @@ export interface WorkEntryRevision {
 export interface WorkEntry {
   id: EntryId;
   employeeId: EmployeeId;
-  taskId: TaskId;
+  /**
+   * In-house entries are task-linked. Client-site entries have no task —
+   * the database enforces exactly one of taskId or the client pair below.
+   */
+  taskId?: TaskId;
   /** Optional subtask within the task, when the work relates to one deliverable. */
   subtaskId?: SubtaskId;
+  /** Client-site reporting: category and subcategory from the employee's assigned client catalogue. */
+  clientCategoryId?: string;
+  clientSubcategoryId?: string;
   description: string;
   startAt: string;
   endAt: string;
@@ -197,6 +263,9 @@ export interface StatusHistoryEvent {
 export interface WorkLogDatabase {
   version: 2;
   employees: Employee[];
+  organisations: Organisation[];
+  clientCategories: ClientCategory[];
+  clientSubcategories: ClientSubcategory[];
   teams: Team[];
   employeeTeams: EmployeeTeam[];
   projects: TeamProject[];

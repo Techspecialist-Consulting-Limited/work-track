@@ -177,7 +177,7 @@ async function main() {
         id: uuid(`entry:${e.id}`),
         employeeId: empUuid.get(e.employeeId)!,
         entryType: "work" as const,
-        taskId: taskUuid.get(e.taskId)!,
+        taskId: e.taskId ? taskUuid.get(e.taskId)! : null,
         subtaskId: e.subtaskId ? subtaskUuid.get(e.subtaskId) ?? null : null,
         description: e.description,
         startAt: new Date(e.startAt),

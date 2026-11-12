@@ -8,7 +8,7 @@ import { ProfileMenu } from "@/components/worklog/ProfileMenu";
 import { StatusBadge } from "@/components/worklog/StatusBadge";
 import { BottomSheet } from "@/components/management/mobile/shared";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
-import { filterEntries, type RangeFilter } from "@/lib/worklog/selectors";
+import { filterEntries, getEntryLabel, type RangeFilter } from "@/lib/worklog/selectors";
 import { TASK_STATUS_LABELS, WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getZonedDateKey } from "@/lib/worktrack/schedule-config";
@@ -24,6 +24,9 @@ function defaultFilter(): RangeFilter {
     location: "all",
     taskStatus: "all",
     hours: "all",
+    organisationId: "all",
+    clientCategoryId: "all",
+    clientSubcategoryId: "all",
   };
 }
 
@@ -71,7 +74,10 @@ export function WorkLogReports() {
     (filter.employeeId !== "all" ? 1 : 0) +
     (filter.location !== "all" ? 1 : 0) +
     (filter.taskStatus !== "all" ? 1 : 0) +
-    (filter.hours !== "all" ? 1 : 0);
+    (filter.hours !== "all" ? 1 : 0) +
+    (filter.organisationId && filter.organisationId !== "all" ? 1 : 0) +
+    (filter.clientCategoryId && filter.clientCategoryId !== "all" ? 1 : 0) +
+    (filter.clientSubcategoryId && filter.clientSubcategoryId !== "all" ? 1 : 0);
 
   const chips: { key: string; label: string; clear: () => void }[] = [];
   if (datesActive) {
@@ -109,6 +115,30 @@ export function WorkLogReports() {
       key: "hours",
       label: filter.hours === "normal" ? "Normal hours" : "Overtime",
       clear: () => update({ hours: "all" }),
+    });
+  }
+  if (filter.organisationId && filter.organisationId !== "all") {
+    const org = db.organisations.find((o) => o.id === filter.organisationId);
+    chips.push({
+      key: "organisation",
+      label: org ? `${org.name} (${org.kind === "employer" ? "Employer" : "Client"})` : "Organisation",
+      clear: () => update({ organisationId: "all" }),
+    });
+  }
+  if (filter.clientCategoryId && filter.clientCategoryId !== "all") {
+    const cat = db.clientCategories.find((c) => c.id === filter.clientCategoryId);
+    chips.push({
+      key: "category",
+      label: cat ? `Category: ${cat.name}` : "Category",
+      clear: () => update({ clientCategoryId: "all", clientSubcategoryId: "all" }),
+    });
+  }
+  if (filter.clientSubcategoryId && filter.clientSubcategoryId !== "all") {
+    const sub = db.clientSubcategories.find((s) => s.id === filter.clientSubcategoryId);
+    chips.push({
+      key: "subcategory",
+      label: sub ? `Subcategory: ${sub.name}` : "Subcategory",
+      clear: () => update({ clientSubcategoryId: "all" }),
     });
   }
 
@@ -187,7 +217,14 @@ export function WorkLogReports() {
 
         {/* Desktop: compact inline filter panel */}
         <section className="mb-6 hidden rounded-2xl border border-[#E2E2EE] bg-white p-4 lg:grid lg:grid-cols-6">
-          <FilterFields value={filter} onChange={update} employees={db.employees} />
+          <FilterFields
+            value={filter}
+            onChange={update}
+            employees={db.employees}
+            organisations={db.organisations}
+            categories={db.clientCategories}
+            subcategories={db.clientSubcategories}
+          />
         </section>
 
         <div className="overflow-x-auto rounded-2xl border border-[#E2E2EE] bg-white">
@@ -211,14 +248,33 @@ export function WorkLogReports() {
               {entries.map((e) => {
                 const employee = db.employees.find((x) => x.id === e.employeeId);
                 const task = db.tasks.find((t) => t.id === e.taskId);
+                const isClientEntry = !e.taskId && Boolean(e.clientCategoryId || e.clientSubcategoryId);
+                const clientCategory = e.clientCategoryId
+                  ? db.clientCategories.find((row) => row.id === e.clientCategoryId)
+                  : undefined;
+                const clientSubcategory = e.clientSubcategoryId
+                  ? db.clientSubcategories.find((row) => row.id === e.clientSubcategoryId)
+                  : undefined;
+                const clientOrg = clientCategory?.clientOrganisationId
+                  ? db.organisations.find((org) => org.id === clientCategory.clientOrganisationId)
+                  : undefined;
+                const workLabel = isClientEntry
+                  ? [clientOrg?.name, clientCategory?.name, clientSubcategory?.name].filter(Boolean).join(" › ") || getEntryLabel(db, e)
+                  : (task?.title ?? "—");
                 return (
                   <tr key={e.id} className="border-b border-[#F1F1F8] last:border-0">
                     <td className="px-4 py-3">{formatDateLabel(dateKeyOf(e.startAt))}</td>
                     <td className="px-4 py-3">{employee?.name ?? e.employeeId}</td>
-                    <td className="px-4 py-3">{task?.title ?? "—"}</td>
+                    <td className="px-4 py-3">{workLabel}</td>
                     <td className="px-4 py-3">{formatTime(e.startAt)}–{formatTime(e.endAt)}</td>
                     <td className="px-4 py-3">{WORK_LOCATION_LABELS[e.workLocation]}</td>
-                    <td className="px-4 py-3"><StatusBadge status={task?.currentStatus ?? "ongoing"} /></td>
+                    <td className="px-4 py-3">
+                      {isClientEntry ? (
+                        <span className="text-[#8B8B9A]">Client-site</span>
+                      ) : (
+                        <StatusBadge status={task?.currentStatus ?? "ongoing"} />
+                      )}
+                    </td>
                     <td className="px-4 py-3">{formatMinutes(durationMinutes(e.startAt, e.endAt))}</td>
                     <td className="px-4 py-3">{e.overtimeMinutes > 0 ? formatMinutes(e.overtimeMinutes) : "—"}</td>
                   </tr>
@@ -232,7 +288,14 @@ export function WorkLogReports() {
       {/* Mobile filter sheet */}
       <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title="Filters">
         <div className="grid max-h-[60dvh] gap-3 overflow-y-auto overscroll-contain">
-          <FilterFields value={draft} onChange={updateDraft} employees={db.employees} />
+          <FilterFields
+            value={draft}
+            onChange={updateDraft}
+            employees={db.employees}
+            organisations={db.organisations}
+            categories={db.clientCategories}
+            subcategories={db.clientSubcategories}
+          />
         </div>
         <div className="mt-4 flex gap-2 border-t border-[#EEEAF2] pt-4">
           <button
@@ -259,11 +322,50 @@ function FilterFields({
   value,
   onChange,
   employees,
+  organisations,
+  categories,
+  subcategories,
 }: {
   value: RangeFilter;
   onChange: (patch: Partial<RangeFilter>) => void;
   employees?: { id: string; name: string }[];
+  organisations?: { id: string; name: string; kind: string }[];
+  categories?: { id: string; name: string; clientOrganisationId: string; clientOrganisationName?: string }[];
+  subcategories?: { id: string; name: string; categoryId: string; clientOrganisationId: string }[];
 }) {
+  const orgName = (id: string) => organisations?.find((o) => o.id === id)?.name ?? "";
+  const selectedOrg =
+    value.organisationId && value.organisationId !== "all"
+      ? organisations?.find((o) => o.id === value.organisationId)
+      : undefined;
+  // When a client organisation is selected, only its categories are offered;
+  // employer selections keep the full catalogue (their staff span clients).
+  const scopedCategories =
+    selectedOrg?.kind === "client"
+      ? (categories ?? []).filter((cat) => cat.clientOrganisationId === selectedOrg.id)
+      : (categories ?? []);
+  // Category options are disambiguated by client when names collide across clients.
+  const categoryNameCounts = new Map<string, number>();
+  for (const cat of scopedCategories) {
+    categoryNameCounts.set(cat.name.toLowerCase(), (categoryNameCounts.get(cat.name.toLowerCase()) ?? 0) + 1);
+  }
+  const categoryOptions = scopedCategories.map((cat) => ({
+    id: cat.id,
+    label:
+      (categoryNameCounts.get(cat.name.toLowerCase()) ?? 0) > 1
+        ? `${cat.name} — ${cat.clientOrganisationName ?? orgName(cat.clientOrganisationId)}`
+        : cat.name,
+  }));
+  // If the selected category falls outside the scoped options (e.g. after an
+  // organisation change), it is not offered — the filter itself stays ANDed.
+  const selectedCategoryValid =
+    !value.clientCategoryId ||
+    value.clientCategoryId === "all" ||
+    scopedCategories.some((cat) => cat.id === value.clientCategoryId);
+  const effectiveCategoryId = selectedCategoryValid ? value.clientCategoryId : "all";
+  const subOptions = (subcategories ?? []).filter(
+    (sub) => !effectiveCategoryId || effectiveCategoryId === "all" || sub.categoryId === effectiveCategoryId
+  );
   return (
     <>
       <label className="flex flex-col gap-1 text-[12px] text-[#737A96] lg:col-span-1">From
@@ -297,6 +399,59 @@ function FilterFields({
           <option value="all">All</option>
           <option value="normal">Normal hours only</option>
           <option value="overtime">Overtime only</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Organisation
+        <select
+          value={value.organisationId ?? "all"}
+          onChange={(e) => {
+            const orgId = e.target.value;
+            const org = organisations?.find((o) => o.id === orgId);
+            // Changing to a different client invalidates a category outside it.
+            const cat =
+              org?.kind === "client" && value.clientCategoryId && value.clientCategoryId !== "all"
+                ? categories?.find((c) => c.id === value.clientCategoryId)
+                : undefined;
+            const stale = Boolean(org?.kind === "client" && cat && cat.clientOrganisationId !== org.id);
+            onChange(
+              stale
+                ? { organisationId: orgId, clientCategoryId: "all", clientSubcategoryId: "all" }
+                : { organisationId: orgId }
+            );
+          }}
+          className={selectClass}
+        >
+          <option value="all">All organisations</option>
+          {(organisations ?? []).map((org) => (
+            <option key={org.id} value={org.id}>
+              {org.name} — {org.kind === "employer" ? "Employer" : "Client"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Category
+        <select
+          value={effectiveCategoryId ?? "all"}
+          onChange={(e) => onChange({ clientCategoryId: e.target.value, clientSubcategoryId: "all" })}
+          className={selectClass}
+        >
+          <option value="all">All categories</option>
+          {categoryOptions.map((cat) => (
+            <option key={cat.id} value={cat.id}>{cat.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-[12px] text-[#737A96]">Subcategory
+        <select
+          value={selectedCategoryValid ? (value.clientSubcategoryId ?? "all") : "all"}
+          onChange={(e) => onChange({ clientSubcategoryId: e.target.value })}
+          disabled={!effectiveCategoryId || effectiveCategoryId === "all"}
+          className={selectClass}
+        >
+          <option value="all">All subcategories</option>
+          {subOptions.map((sub) => (
+            <option key={sub.id} value={sub.id}>{sub.name}</option>
+          ))}
         </select>
       </label>
     </>

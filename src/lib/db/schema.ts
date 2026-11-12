@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -25,16 +26,62 @@ const timestamps = {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 };
 
-export const employees = pgTable("employees", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  employeeCode: text("employee_code"),
-  fullName: text("full_name").notNull(),
-  jobTitle: text("job_title").notNull(),
-  department: text("department").notNull().default(""),
-  avatarUrl: text("avatar_url"),
-  isActive: boolean("is_active").notNull().default(true),
-  ...timestamps,
-});
+/**
+ * Organisations are either employers (kind='employer') or client sites
+ * (kind='client'). An employee's employing organisation is never replaced by
+ * the client they are deployed to. Kind is immutable — enforced by the
+ * organisations_kind_immutable trigger in migration 0008 (not representable
+ * in Drizzle).
+ */
+export const organisations = pgTable(
+  "organisations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    description: text("description"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdByMembershipId: uuid("created_by_membership_id").references((): AnyPgColumn => memberships.id),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("organisations_kind_name_key").on(
+      t.kind,
+      sql`regexp_replace(lower(btrim(${t.name})), '\s+', ' ', 'g')`
+    ),
+    index("organisations_kind_idx").on(t.kind, t.isActive),
+    check("organisations_name_not_blank", sql`length(btrim(name)) > 0`),
+    check("organisations_kind_check", sql`kind IN ('employer', 'client')`),
+  ]
+);
+
+export const employees = pgTable(
+  "employees",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeCode: text("employee_code"),
+    fullName: text("full_name").notNull(),
+    jobTitle: text("job_title").notNull(),
+    department: text("department").notNull().default(""),
+    avatarUrl: text("avatar_url"),
+    isActive: boolean("is_active").notNull().default(true),
+    /** 'in_house' reports against projects/tasks; 'client_site' reports against the assigned client's catalogue. */
+    workArrangement: text("work_arrangement").notNull().default("in_house"),
+    employerOrganisationId: uuid("employer_organisation_id").references(() => organisations.id),
+    /** Client deployment — only set when work_arrangement = 'client_site'. */
+    clientOrganisationId: uuid("client_organisation_id").references(() => organisations.id),
+    ...timestamps,
+  },
+  (t) => [
+    check("employees_work_arrangement_check", sql`work_arrangement IN ('in_house', 'client_site')`),
+    check(
+      "employees_arrangement_client_check",
+      sql`(work_arrangement = 'in_house' AND client_organisation_id IS NULL) OR (work_arrangement = 'client_site' AND client_organisation_id IS NOT NULL)`
+    ),
+    index("employees_client_organisation_idx").on(t.clientOrganisationId),
+    index("employees_employer_organisation_idx").on(t.employerOrganisationId),
+  ]
+);
 
 export const memberships = pgTable(
   "worktrack_memberships",
@@ -136,6 +183,79 @@ export const teamProjects = pgTable(
     index("team_projects_team_idx").on(t.teamId, t.isActive),
     check("team_projects_name_not_blank", sql`length(btrim(name)) > 0`),
     check("team_projects_origin_check", sql`origin IN ('admin', 'staff')`),
+  ]
+);
+
+/**
+ * Per-client category catalogue for client-site reporting. Admin-created rows
+ * are 'approved'; staff suggestions are 'pending' until reviewed. Rejected
+ * rows are never deleted so historical entries keep resolving. Name uniqueness
+ * is case- and whitespace-insensitive via the normalised expression index
+ * (same expression as migration 0008).
+ *
+ * The client_categories_client_kind / client_subcategories_client_kind
+ * triggers (migration 0008) enforce that client_organisation_id references a
+ * kind='client' organisation — not representable in Drizzle.
+ */
+export const clientCategories = pgTable(
+  "client_categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientOrganisationId: uuid("client_organisation_id")
+      .notNull()
+      .references(() => organisations.id),
+    name: text("name").notNull(),
+    approvalStatus: text("approval_status").notNull().default("approved"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdByEmployeeId: uuid("created_by_employee_id").references(() => employees.id),
+    reviewedByMembershipId: uuid("reviewed_by_membership_id").references(() => memberships.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewNote: text("review_note"),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("client_categories_name_key")
+      .on(t.clientOrganisationId, sql`regexp_replace(lower(btrim(${t.name})), '\s+', ' ', 'g')`)
+      .where(sql`approval_status <> 'rejected'`),
+    uniqueIndex("client_categories_id_client_key").on(t.id, t.clientOrganisationId),
+    index("client_categories_client_idx").on(t.clientOrganisationId, t.approvalStatus, t.isActive),
+    check("client_categories_name_not_blank", sql`length(btrim(name)) > 0`),
+    check("client_categories_status_check", sql`approval_status IN ('approved', 'pending', 'rejected')`),
+  ]
+);
+
+export const clientSubcategories = pgTable(
+  "client_subcategories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientOrganisationId: uuid("client_organisation_id")
+      .notNull()
+      .references(() => organisations.id),
+    categoryId: uuid("category_id").notNull(),
+    name: text("name").notNull(),
+    approvalStatus: text("approval_status").notNull().default("approved"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdByEmployeeId: uuid("created_by_employee_id").references(() => employees.id),
+    reviewedByMembershipId: uuid("reviewed_by_membership_id").references(() => memberships.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewNote: text("review_note"),
+    ...timestamps,
+  },
+  (t) => [
+    // Subcategory's client must equal its parent category's client.
+    foreignKey({
+      columns: [t.categoryId, t.clientOrganisationId],
+      foreignColumns: [clientCategories.id, clientCategories.clientOrganisationId],
+      name: "client_subcategories_category_client_fk",
+    }),
+    uniqueIndex("client_subcategories_name_key")
+      .on(t.categoryId, sql`regexp_replace(lower(btrim(${t.name})), '\s+', ' ', 'g')`)
+      .where(sql`approval_status <> 'rejected'`),
+    uniqueIndex("client_subcategories_id_category_key").on(t.id, t.categoryId),
+    index("client_subcategories_client_idx").on(t.clientOrganisationId, t.approvalStatus, t.isActive),
+    index("client_subcategories_category_idx").on(t.categoryId, t.approvalStatus, t.isActive),
+    check("client_subcategories_name_not_blank", sql`length(btrim(name)) > 0`),
+    check("client_subcategories_status_check", sql`approval_status IN ('approved', 'pending', 'rejected')`),
   ]
 );
 
@@ -318,6 +438,9 @@ export const timeEntries = pgTable(
     entryType: entryTypeEnum("entry_type").notNull(),
     taskId: uuid("task_id").references(() => tasks.id),
     subtaskId: uuid("subtask_id").references(() => taskSubtasks.id),
+    /** Client-site work references — set instead of taskId, never both (DB check). */
+    clientCategoryId: uuid("client_category_id").references(() => clientCategories.id),
+    clientSubcategoryId: uuid("client_subcategory_id").references(() => clientSubcategories.id),
     description: text("description"),
     startAt: timestamp("start_at", { withTimezone: true }).notNull(),
     /** Null while a break is still running. */
@@ -342,14 +465,22 @@ export const timeEntries = pgTable(
     index("time_entries_start_idx").on(t.startAt),
     index("time_entries_task_idx").on(t.taskId),
     index("time_entries_subtask_idx").on(t.subtaskId),
+    index("time_entries_client_category_idx").on(t.clientCategoryId),
+    index("time_entries_client_subcategory_idx").on(t.clientSubcategoryId),
     index("time_entries_recovery_import_idx").on(t.recoveryImportId),
+    // The entry's category must be the subcategory's own category.
+    foreignKey({
+      columns: [t.clientSubcategoryId, t.clientCategoryId],
+      foreignColumns: [clientSubcategories.id, clientSubcategories.categoryId],
+      name: "time_entries_client_pair_fk",
+    }),
     check(
       "time_entries_end_after_start",
       sql`end_at IS NULL OR end_at > start_at`
     ),
     check(
       "time_entries_work_fields",
-      sql`entry_type <> 'work' OR (task_id IS NOT NULL AND work_location IS NOT NULL AND work_type IS NOT NULL AND end_at IS NOT NULL AND duration_minutes IS NOT NULL)`
+      sql`entry_type <> 'work' OR (work_location IS NOT NULL AND work_type IS NOT NULL AND end_at IS NOT NULL AND duration_minutes IS NOT NULL AND ((task_id IS NOT NULL AND client_category_id IS NULL AND client_subcategory_id IS NULL) OR (task_id IS NULL AND client_category_id IS NOT NULL AND client_subcategory_id IS NOT NULL)))`
     ),
     check(
       "time_entries_break_fields",

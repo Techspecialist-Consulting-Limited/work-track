@@ -14,7 +14,6 @@ import {
   FileText,
   Folder,
   Info,
-  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -35,7 +34,6 @@ import {
 import {
   getDatabaseSnapshot,
   getSessionEmployeeId,
-  getSessionIsConfigAdmin,
   getSessionRole,
   getServerSnapshot,
   getSessionUser,
@@ -43,7 +41,7 @@ import {
 } from "@/lib/worklog/repository";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
-import { getDaySummary, getTaskById } from "@/lib/worklog/selectors";
+import { getDaySummary, getEntryLabel } from "@/lib/worklog/selectors";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getZonedDateKey, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
@@ -80,13 +78,13 @@ function workSnapshot(entries: WorkEntry[], db: WorkLogDatabase): string {
   const seen = new Set<string>();
   const titles: string[] = [];
   for (const entry of entries) {
-    const title = getTaskById(db, entry.taskId)?.title ?? "Task";
+    const title = getEntryLabel(db, entry);
     if (seen.has(title)) continue;
     seen.add(title);
     titles.push(title);
     if (titles.length === 3) break;
   }
-  const remaining = new Set(entries.map((e) => getTaskById(db, e.taskId)?.title ?? "Task")).size - titles.length;
+  const remaining = new Set(entries.map((e) => getEntryLabel(db, e))).size - titles.length;
   if (!titles.length) return "No work logged";
   return titles.join(" · ") + (remaining > 0 ? ` · +${remaining} more` : "");
 }
@@ -108,6 +106,7 @@ function ExecutiveDesktopBoard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<BoardFilter>("all");
+  const [orgFilter, setOrgFilter] = useState("all");
   const [pickerOpen, setPickerOpen] = useState(false);
   const togglePicker = useCallback(() => setPickerOpen((v) => !v), []);
   const [exporting, setExporting] = useState(false);
@@ -134,8 +133,16 @@ function ExecutiveDesktopBoard() {
     [db, activeKey, now]
   );
 
+  const orgKind = orgFilter !== "all"
+    ? db.organisations.find((org) => org.id === orgFilter)?.kind
+    : undefined;
   const visibleEmployees = employeeDays.filter(({ employee, status }) => {
     if (query && !employee.name.toLowerCase().includes(query.trim().toLowerCase())) return false;
+    // Employer orgs match employerOrganisationId; client orgs match the
+    // assigned client — a deployed employee matches both filters.
+    if (orgKind === "employer" && employee.employerOrganisationId !== orgFilter) return false;
+    if (orgKind === "client" && employee.clientOrganisationId !== orgFilter) return false;
+    if (orgFilter !== "all" && !orgKind) return false;
     if (filter === "all") return true;
     if (filter === "logged") return status === "logged";
     if (filter === "break") return status === "on_break";
@@ -231,15 +238,6 @@ function ExecutiveDesktopBoard() {
               <FileText size={15} aria-hidden="true" />
               Reports
             </Link>
-            {getSessionIsConfigAdmin() ? (
-              <Link
-                href="/admin/teams"
-                className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[#E7E6F0] px-3 text-sm font-semibold text-[#4A4665] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-              >
-                <Users size={15} aria-hidden="true" />
-                Teams
-              </Link>
-            ) : null}
             {getSessionEmployeeId() && getSessionRole() !== "chairman" ? (
               <Link
                 href="/"
@@ -352,6 +350,19 @@ function ExecutiveDesktopBoard() {
               className="min-h-11 w-full rounded-xl border border-[#E7E6F0] bg-white px-3.5 text-base text-[#17172F] outline-none transition placeholder:text-[#A6A3BC] focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15"
             />
           </label>
+          <WorkTrackSelect
+            label="Filter by organisation"
+            value={orgFilter}
+            onChange={setOrgFilter}
+            className="w-56"
+            options={[
+              { value: "all", label: "All organisations" },
+              ...db.organisations.map((org) => ({
+                value: org.id,
+                label: `${org.name} — ${org.kind === "employer" ? "Employer" : "Client"}`,
+              })),
+            ]}
+          />
           <WorkTrackSelect<BoardFilter>
             label="Filter by status"
             value={filter}
@@ -392,6 +403,14 @@ function ExecutiveDesktopBoard() {
                 emptyMessage="No timed tasks for this date."
               />
             </section>
+            <ClientWorkList
+              db={db}
+              items={visibleEmployees.flatMap(({ employee, day }) =>
+                day.entries
+                  .filter((entry) => !entry.taskId)
+                  .map((entry) => ({ entry, employee }))
+              )}
+            />
             <LegacyTaskList tasks={visibleLegacyTasks} />
           </div>
         ) : (
@@ -829,6 +848,202 @@ function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDa
   );
 }
 
+/** Resolves the client organisation a client-site entry belongs to via its catalogue pair. */
+function entryClientOrgId(db: WorkLogDatabase, entry: WorkEntry): string | undefined {
+  const category = entry.clientCategoryId
+    ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+    : undefined;
+  if (category) return category.clientOrganisationId;
+  const subcategory = entry.clientSubcategoryId
+    ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+    : undefined;
+  return subcategory?.clientOrganisationId;
+}
+
+/**
+ * Client-site work grouped under its client organisation. Category and
+ * subcategory come from the entry's stored references, so rejected or
+ * deactivated catalogue items still display for historical records.
+ */
+function ClientWorkGroup({ entries, db }: { entries: WorkEntry[]; db: WorkLogDatabase }) {
+  const sorted = [...entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const orgId = entryClientOrgId(db, sorted[0]);
+  const org = orgId ? db.organisations.find((row) => row.id === orgId) : undefined;
+  const minutes = sorted.reduce((total, entry) => total + durationMinutes(entry.startAt, entry.endAt), 0);
+
+  return (
+    <>
+      <tr className="border-t-2 border-[#E7E1F8] bg-[#F5F2FD]">
+        <td colSpan={7} className="px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
+              <span className="break-words text-xs font-bold text-[#17172F]">
+                {org?.name ?? "Client site"}
+              </span>
+            </span>
+            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
+              Client work
+            </span>
+            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
+              {sorted.length} {sorted.length === 1 ? "entry" : "entries"}
+            </span>
+            <span className="ml-auto whitespace-nowrap text-xs font-bold text-[#17172F]">
+              {formatMinutes(minutes)}
+            </span>
+          </div>
+        </td>
+      </tr>
+      {/* Column labels for this group: client entries have no project/subtask/status. */}
+      <tr className="border-t border-[#F5F3FB] bg-[#FBFAFE]">
+        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Time</th>
+        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Category</th>
+        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Subcategory</th>
+        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Work Performed</th>
+        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Type</th>
+        <th scope="col" className="px-3 py-1.5 text-left text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Location</th>
+        <th scope="col" className="px-3 py-1.5 text-right text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8B8B9A]">Duration</th>
+      </tr>
+      {sorted.map((entry) => {
+        const category = entry.clientCategoryId
+          ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+          : undefined;
+        const subcategory = entry.clientSubcategoryId
+          ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+          : undefined;
+        return (
+          <tr key={entry.id} className="align-top border-t border-[#F5F3FB] bg-white">
+            <td className="whitespace-nowrap px-3 py-2.5 text-xs font-semibold text-[#17172F]">
+              {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+            </td>
+            <td className="break-words px-3 py-2.5 text-xs text-[#777A91]">{category?.name ?? "—"}</td>
+            <td className="break-words px-3 py-2.5 text-xs font-medium text-[#53506B]">
+              {subcategory?.name ?? "—"}
+            </td>
+            <td className="px-3 py-2.5 text-xs leading-5 text-[#53506B]">
+              <span className="whitespace-pre-wrap break-words">{entry.description.trim() || "—"}</span>
+              {entry.evidenceLink ? (
+                <a
+                  href={entry.evidenceLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-0.5 inline-flex items-center gap-1 font-semibold text-[#6C45F5] hover:underline"
+                >
+                  <ExternalLink size={10} aria-hidden="true" /> Evidence
+                </a>
+              ) : null}
+            </td>
+            <td className="px-3 py-2.5 text-xs text-[#8B8B9A]">Client-site</td>
+            <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">
+              {activityLocationLabel(entry.workLocation)}
+            </td>
+            <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-[#17172F]">
+              {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
+              {entry.overtimeMinutes > 0 ? (
+                <span
+                  className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
+                  title="Includes overtime"
+                >
+                  OT
+                </span>
+              ) : null}
+            </td>
+          </tr>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * Client-site entries for the By Tasks view. They have no task, so they are
+ * grouped under their client organisation rather than the task hierarchy.
+ */
+function ClientWorkList({
+  db,
+  items,
+}: {
+  db: WorkLogDatabase;
+  items: { entry: WorkEntry; employee: Employee }[];
+}) {
+  if (items.length === 0) return null;
+  const byOrg = new Map<string, { entry: WorkEntry; employee: Employee }[]>();
+  for (const item of [...items].sort((a, b) => a.entry.startAt.localeCompare(b.entry.startAt))) {
+    const orgId = entryClientOrgId(db, item.entry) ?? "";
+    const list = byOrg.get(orgId) ?? [];
+    list.push(item);
+    byOrg.set(orgId, list);
+  }
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-bold text-[#39364F]">Client-site work</h2>
+        <span className="text-[11px] font-medium text-[#8B8B9A]">
+          {items.length} {items.length === 1 ? "entry" : "entries"}
+        </span>
+      </div>
+      <div className="space-y-3">
+        {[...byOrg.entries()].map(([orgId, group]) => {
+          const org = orgId ? db.organisations.find((row) => row.id === orgId) : undefined;
+          const minutes = group.reduce(
+            (total, item) => total + durationMinutes(item.entry.startAt, item.entry.endAt),
+            0
+          );
+          return (
+            <div key={orgId || "unknown"} className="overflow-hidden rounded-2xl border border-[#E7E6F0] bg-white shadow-sm">
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-[#F1F0F6] bg-[#FCFBFF] px-4 py-2.5">
+                <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6C45F5]" />
+                <span className="break-words text-xs font-bold text-[#17172F]">
+                  {org?.name ?? "Client site"}
+                </span>
+                <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
+                  Client work
+                </span>
+                <span className="ml-auto whitespace-nowrap text-xs font-bold text-[#17172F]">
+                  {formatMinutes(minutes)}
+                </span>
+              </div>
+              <ul className="divide-y divide-[#F5F3FB]">
+                {group.map(({ entry, employee }) => {
+                  const category = entry.clientCategoryId
+                    ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+                    : undefined;
+                  const subcategory = entry.clientSubcategoryId
+                    ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+                    : undefined;
+                  return (
+                    <li key={entry.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 py-2.5">
+                      <span className="whitespace-nowrap text-xs font-semibold text-[#17172F]">
+                        {formatTime(entry.startAt)} – {formatTime(entry.endAt)}
+                      </span>
+                      <span className="text-xs font-medium text-[#53506B]">{employee.name}</span>
+                      <span className="min-w-0 flex-1 break-words text-xs text-[#777A91]">
+                        {[category?.name, subcategory?.name].filter(Boolean).join(" › ") || "Client work"}
+                        {entry.description.trim() ? ` — ${entry.description.trim()}` : ""}
+                      </span>
+                      <span className="whitespace-nowrap text-xs font-semibold text-[#17172F]">
+                        {formatMinutes(durationMinutes(entry.startAt, entry.endAt))}
+                        {entry.overtimeMinutes > 0 ? (
+                          <span
+                            className="ml-1.5 rounded bg-[#FFF1E8] px-1 py-px text-[9px] font-bold uppercase tracking-wide text-[#B45309]"
+                            title="Includes overtime"
+                          >
+                            OT
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function EmployeeDrawer({
   db,
   employee,
@@ -857,8 +1072,25 @@ function EmployeeDrawer({
   const day = getDaySummary(db, employee.id, viewDate, new Date());
   const hierarchy = buildEmployeeHierarchy(db, employee.id, viewDate);
 
+  // Client-site entries have no task, so they group by client organisation
+  // instead of appearing under the in-house project/task hierarchy.
+  const clientEntriesByOrg = new Map<string, WorkEntry[]>();
+  for (const entry of day.entries) {
+    if (entry.taskId) continue;
+    const orgId = entryClientOrgId(db, entry) ?? "";
+    const list = clientEntriesByOrg.get(orgId) ?? [];
+    list.push(entry);
+    clientEntriesByOrg.set(orgId, list);
+  }
+
   const blocks = [
     ...(hierarchy?.tasks ?? []).map((item) => ({ kind: "task" as const, at: item.firstStartAt, item })),
+    ...[...clientEntriesByOrg.entries()].map(([orgId, entries]) => ({
+      kind: "client" as const,
+      at: entries.reduce((earliest, entry) => (entry.startAt < earliest ? entry.startAt : earliest), entries[0].startAt),
+      orgId,
+      entries,
+    })),
     ...day.breaks.map((brk) => ({ kind: "break" as const, at: brk.startAt, brk })),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
@@ -881,6 +1113,12 @@ function EmployeeDrawer({
             <h2 className="truncate text-base font-bold text-[#17172F]">{employee.name}</h2>
             <p className="truncate text-[11px] text-[#777A91]">
               {employee.role} · {employee.department}
+            </p>
+            <p className="truncate text-[11px] text-[#8B8B9A]">
+              {employee.employerOrganisationName ?? "Employer —"}
+              {employee.workArrangement === "client_site"
+                ? ` · Client: ${employee.clientOrganisationName ?? "—"}`
+                : " · In-house"}
             </p>
           </div>
           <button
@@ -1012,6 +1250,8 @@ function EmployeeDrawer({
                           </div>
                         </td>
                       </tr>
+                    ) : block.kind === "client" ? (
+                      <ClientWorkGroup key={`client-${block.orgId}`} entries={block.entries} db={db} />
                     ) : (
                       <ActivityProjectGroup key={block.item.task.id} item={block.item} db={db} />
                     )

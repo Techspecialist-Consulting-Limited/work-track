@@ -4,10 +4,13 @@ import { randomUUID } from "node:crypto";
 import { db } from "./index";
 import {
   auditEvents,
+  clientCategories,
+  clientSubcategories,
   employees,
   employeeTeams,
   invitations,
   memberships,
+  organisations,
   subtaskStatusHistory,
   taskCategories,
   taskProgressUpdateRevisions,
@@ -33,6 +36,11 @@ import {
   validateTaskTitle,
 } from "@/lib/worklog/validation";
 import { checkParentCanBeDone, checkSubtaskStatusChange, isTaskStatus } from "@/lib/worklog/status-rules";
+import {
+  canReviewSuggestion,
+  findCatalogueDuplicate,
+  validateCatalogueName,
+} from "@/lib/worklog/client-catalogue";
 import { getZonedDateKey, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
 import { splitIntervalMinutes } from "@/lib/worklog/time";
 import type { TaskStatus, WorkLogDatabase } from "@/lib/worklog/types";
@@ -48,6 +56,9 @@ export type ActionResult =
       projectId?: string;
       duplicateProjectId?: string;
       duplicateProjectName?: string;
+      organisationId?: string;
+      clientCategoryId?: string;
+      clientSubcategoryId?: string;
     }
   | {
       ok: false;
@@ -59,8 +70,10 @@ export type ActionResult =
 
 interface EntryInput {
   employeeId: string;
-  taskId: string;
+  taskId?: string;
   subtaskId?: string | null;
+  clientCategoryId?: string | null;
+  clientSubcategoryId?: string | null;
   description: string;
   startAt: string;
   endAt: string;
@@ -124,6 +137,59 @@ async function ownedSubtask(taskId: string, subtaskId: string) {
       .where(and(eq(taskSubtasks.id, subtaskId), eq(taskSubtasks.taskId, taskId)))
       .limit(1)
   )[0];
+}
+
+/**
+ * Validates a client-site entry pair against the employee's assigned client.
+ * Only approved+active rows or the employee's own pending suggestions may be
+ * attached to a new entry; the category/subcategory must belong together and
+ * to the same client organisation.
+ */
+async function clientEntryPair(
+  employeeId: string,
+  categoryId: string | null | undefined,
+  subcategoryId: string | null | undefined,
+  /** Edits are scoped to the entry's original client org, which may differ from the current assignment. */
+  clientOrgId?: string
+): Promise<
+  | { ok: true; categoryId: string; subcategoryId: string }
+  | { ok: false; message: string }
+> {
+  const fail = { ok: false as const, message: "Choose a category and subcategory from your client's list." };
+  if (!categoryId || !subcategoryId) return fail;
+  let orgId = clientOrgId;
+  if (!orgId) {
+    const employee = (
+      await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1)
+    )[0];
+    if (!employee || employee.workArrangement !== "client_site" || !employee.clientOrganisationId) {
+      return { ok: false, message: "Your account is not assigned to a client." };
+    }
+    orgId = employee.clientOrganisationId;
+  }
+  const org = await clientOrganisation(orgId);
+  if (!org || (!clientOrgId && !org.isActive)) {
+    return { ok: false, message: "Your client organisation is not active." };
+  }
+  const category = (
+    await db.select().from(clientCategories).where(eq(clientCategories.id, categoryId)).limit(1)
+  )[0];
+  const subcategory = (
+    await db.select().from(clientSubcategories).where(eq(clientSubcategories.id, subcategoryId)).limit(1)
+  )[0];
+  const selectable = (row: { approvalStatus: string; isActive: boolean; createdByEmployeeId: string | null } | undefined) =>
+    Boolean(row && row.isActive && (row.approvalStatus === "approved" ||
+      (row.approvalStatus === "pending" && row.createdByEmployeeId === employeeId)));
+  if (
+    !selectable(category) ||
+    !selectable(subcategory) ||
+    category!.clientOrganisationId !== org.id ||
+    subcategory!.clientOrganisationId !== org.id ||
+    subcategory!.categoryId !== category!.id
+  ) {
+    return fail;
+  }
+  return { ok: true, categoryId: category!.id, subcategoryId: subcategory!.id };
 }
 
 /** Snapshot for reconciliation — "team"/"config" scope is privileged. */
@@ -924,18 +990,40 @@ export async function addWorkEntryAction(
   const desc = validateDescription(input.description);
   if (!desc.ok) return desc;
 
-  const task = await ownedTask(employeeId, input.taskId);
-  if (!task) return { ok: false, message: "Choose a task first." };
-  if (task.currentStatus === "done" || task.currentStatus === "dropped") {
-    return { ok: false, message: "This task is closed. Reopen it or continue another open task." };
-  }
-  const subtaskId = input.subtaskId?.trim() || null;
-  if (subtaskId) {
-    const subtask = await ownedSubtask(input.taskId, subtaskId);
-    if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
+  const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
+  let taskId: string | null = null;
+  let subtaskId: string | null = null;
+  let clientCategoryId: string | null = null;
+  let clientSubcategoryId: string | null = null;
+
+  if (isClientEntry) {
+    if (!input.description.trim()) {
+      return { ok: false, message: "Describe what you worked on for this client entry." };
+    }
+    if (input.taskId || input.subtaskId) {
+      return { ok: false, message: "Client-site entries cannot be linked to a task." };
+    }
+    const pair = await clientEntryPair(employeeId, input.clientCategoryId, input.clientSubcategoryId);
+    if (!pair.ok) return pair;
+    clientCategoryId = pair.categoryId;
+    clientSubcategoryId = pair.subcategoryId;
+  } else {
+    if (!input.taskId) return { ok: false, message: "Choose a task first." };
+    const task = await ownedTask(employeeId, input.taskId);
+    if (!task) return { ok: false, message: "Choose a task first." };
+    if (task.currentStatus === "done" || task.currentStatus === "dropped") {
+      return { ok: false, message: "This task is closed. Reopen it or continue another open task." };
+    }
+    taskId = task.id;
+    subtaskId = input.subtaskId?.trim() || null;
+    if (subtaskId) {
+      const subtask = await ownedSubtask(taskId, subtaskId);
+      if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
+    }
   }
 
   const split = splitFor(input);
+  const duration = minutesBetween(input.startAt, input.endAt);
 
   try {
     await db.transaction(async (tx) => {
@@ -943,16 +1031,18 @@ export async function addWorkEntryAction(
         id: input.id,
         employeeId,
         entryType: "work",
-        taskId: task.id,
+        taskId,
         subtaskId,
+        clientCategoryId,
+        clientSubcategoryId,
         description: input.description.trim(),
         startAt: new Date(input.startAt),
         endAt: new Date(input.endAt),
-        durationMinutes: minutesBetween(input.startAt, input.endAt),
+        durationMinutes: duration,
         normalMinutes: split.normalMinutes,
         overtimeMinutes: split.overtimeMinutes,
         workLocation: input.workLocation,
-        workType: split.overtimeMinutes >= minutesBetween(input.startAt, input.endAt) ? "overtime" : "normal",
+        workType: split.overtimeMinutes >= duration ? "overtime" : "normal",
         evidenceLink: input.evidenceLink?.trim() || null,
         isReportedOvertime: Boolean(input.isReportedOvertime),
         createdByMembershipId: membership.membershipId,
@@ -967,12 +1057,14 @@ export async function addWorkEntryAction(
   }
   await audit(membership, "entry.create", "time_entry", input.id, null, {
     employeeId,
-    taskId: task.id,
+    taskId,
     subtaskId,
+    clientCategoryId,
+    clientSubcategoryId,
     startAt: input.startAt,
     endAt: input.endAt,
   });
-  return { ok: true, taskId: task.id };
+  return { ok: true, taskId: taskId ?? undefined };
 }
 
 export async function editWorkEntryAction(
@@ -994,35 +1086,97 @@ export async function editWorkEntryAction(
   )[0];
   if (!existing) return { ok: false, message: "This entry no longer exists." };
 
-  const task = await ownedTask(employeeId, input.taskId);
-  if (!task) return { ok: false, message: "Choose a task that belongs to you." };
-  // Existing entries keep their task even if it is now closed (corrections are
-  // allowed), but an edit must not move work onto a different closed task.
-  if ((task.currentStatus === "done" || task.currentStatus === "dropped") && existing.taskId !== task.id) {
-    return { ok: false, message: "This task is closed. Reopen it or choose an open task." };
+  const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
+  const wasClientEntry = Boolean(existing.clientCategoryId || existing.clientSubcategoryId);
+  if (isClientEntry !== wasClientEntry) {
+    return { ok: false, message: "This entry cannot switch between task and client-site reporting." };
   }
-  const subtaskId = input.subtaskId?.trim() || null;
-  if (subtaskId) {
-    const subtask = await ownedSubtask(input.taskId, subtaskId);
-    if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
+  if (isClientEntry && !input.description.trim()) {
+    return { ok: false, message: "Describe what you worked on for this client entry." };
+  }
+
+  let taskId: string | null = null;
+  let subtaskId: string | null = null;
+  let clientCategoryId: string | null = null;
+  let clientSubcategoryId: string | null = null;
+
+  if (isClientEntry) {
+    if (input.taskId || input.subtaskId) {
+      return { ok: false, message: "Client-site entries cannot be linked to a task." };
+    }
+    // The edit stays within the entry's original client organisation — resolved
+    // from the stored reference, never from the employee's current assignment.
+    const existingOrgId = existing.clientCategoryId
+      ? (
+          await db
+            .select({ clientOrganisationId: clientCategories.clientOrganisationId })
+            .from(clientCategories)
+            .where(eq(clientCategories.id, existing.clientCategoryId))
+            .limit(1)
+        )[0]?.clientOrganisationId
+      : existing.clientSubcategoryId
+        ? (
+            await db
+              .select({ clientOrganisationId: clientSubcategories.clientOrganisationId })
+              .from(clientSubcategories)
+              .where(eq(clientSubcategories.id, existing.clientSubcategoryId))
+              .limit(1)
+          )[0]?.clientOrganisationId
+        : undefined;
+    const pair = existingOrgId
+      ? await clientEntryPair(employeeId, input.clientCategoryId, input.clientSubcategoryId, existingOrgId)
+      : ({ ok: false as const, message: "Choose a category and subcategory from your client's list." });
+    if (!pair.ok) {
+      // Keep the entry's existing pair when it is unchanged, even if the
+      // catalogue row is no longer selectable (e.g. rejected after use).
+      const keepExisting =
+        input.clientCategoryId === existing.clientCategoryId &&
+        input.clientSubcategoryId === existing.clientSubcategoryId &&
+        existing.clientCategoryId &&
+        existing.clientSubcategoryId;
+      if (!keepExisting) return pair;
+      clientCategoryId = existing.clientCategoryId;
+      clientSubcategoryId = existing.clientSubcategoryId;
+    } else {
+      clientCategoryId = pair.categoryId;
+      clientSubcategoryId = pair.subcategoryId;
+    }
+  } else {
+    if (!input.taskId) return { ok: false, message: "Choose a task that belongs to you." };
+    const task = await ownedTask(employeeId, input.taskId);
+    if (!task) return { ok: false, message: "Choose a task that belongs to you." };
+    // Existing entries keep their task even if it is now closed (corrections are
+    // allowed), but an edit must not move work onto a different closed task.
+    if ((task.currentStatus === "done" || task.currentStatus === "dropped") && existing.taskId !== task.id) {
+      return { ok: false, message: "This task is closed. Reopen it or choose an open task." };
+    }
+    taskId = task.id;
+    subtaskId = input.subtaskId?.trim() || null;
+    if (subtaskId) {
+      const subtask = await ownedSubtask(taskId, subtaskId);
+      if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
+    }
   }
 
   const split = splitFor(input);
+  const duration = minutesBetween(input.startAt, input.endAt);
   try {
     await db.transaction(async (tx) => {
       await tx
         .update(timeEntries)
         .set({
-          taskId: input.taskId,
+          taskId,
           subtaskId,
+          clientCategoryId,
+          clientSubcategoryId,
           description: input.description.trim(),
           startAt: new Date(input.startAt),
           endAt: new Date(input.endAt),
-          durationMinutes: minutesBetween(input.startAt, input.endAt),
+          durationMinutes: duration,
           normalMinutes: split.normalMinutes,
           overtimeMinutes: split.overtimeMinutes,
           workLocation: input.workLocation,
-          workType: split.overtimeMinutes >= minutesBetween(input.startAt, input.endAt) ? "overtime" : "normal",
+          workType: split.overtimeMinutes >= duration ? "overtime" : "normal",
           evidenceLink: input.evidenceLink?.trim() || null,
           isReportedOvertime: Boolean(input.isReportedOvertime),
           revisionCount: sql`${timeEntries.revisionCount} + 1`,
@@ -1052,15 +1206,17 @@ export async function editWorkEntryAction(
       workLocation: existing.workLocation,
     },
     {
-      taskId: input.taskId,
+      taskId,
       subtaskId,
+      clientCategoryId,
+      clientSubcategoryId,
       description: input.description.trim(),
       startAt: input.startAt,
       endAt: input.endAt,
       workLocation: input.workLocation,
     }
   );
-  return { ok: true, taskId: input.taskId };
+  return { ok: true, taskId: taskId ?? undefined };
 }
 
 /** Staff void their own work entry so the slot frees up and they can re-enter. */
@@ -1359,6 +1515,9 @@ export async function updateBreakAction(
       {
         version: 2,
         employees: [],
+        organisations: [],
+        clientCategories: [],
+        clientSubcategories: [],
         teams: [],
         employeeTeams: [],
         projects: [],
@@ -1477,4 +1636,494 @@ export async function inviteChairmanAction(
     });
   await audit(membership, "member.invite", "invitation", null, null, { email, role: "chairman" });
   return { ok: true };
+}
+
+/* ------------------------------------------------------------------ */
+/* Client-site reporting: organisations, catalogue, suggestions         */
+/* ------------------------------------------------------------------ */
+
+async function clientOrganisation(organisationId: string) {
+  return (
+    await db.select().from(organisations).where(eq(organisations.id, organisationId)).limit(1)
+  )[0];
+}
+
+/** Normalised-name duplicate check within one organisation kind. */
+async function findOrganisationDuplicate(kind: string, name: string, ignoreId?: string) {
+  const rows = await db.select().from(organisations).where(eq(organisations.kind, kind));
+  const key = name.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  return rows.find(
+    (row) => row.id !== ignoreId && row.name.trim().toLocaleLowerCase().replace(/\s+/g, " ") === key
+  );
+}
+
+/** Config admins create client organisations; employer orgs are not created here. */
+export async function createClientOrganisationAction(
+  membership: WorkTrackMembership,
+  input: { id: string; name: string; description?: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+  const duplicate = await findOrganisationDuplicate("client", checked.name);
+  if (duplicate) {
+    return { ok: false, message: `A client organisation named "${duplicate.name}" already exists.` };
+  }
+  try {
+    await db.insert(organisations).values({
+      id: input.id,
+      name: checked.name,
+      kind: "client",
+      description: input.description?.trim() || null,
+      createdByMembershipId: membership.membershipId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("organisations_kind_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: "A client organisation with that name already exists." };
+    }
+    throw e;
+  }
+  await audit(membership, "organisation.create", "organisation", input.id, null, {
+    name: checked.name,
+    kind: "client",
+  });
+  return { ok: true, organisationId: input.id };
+}
+
+/** Edit organisation details. Kind is immutable (DB trigger) and never accepted here. */
+export async function updateOrganisationAction(
+  membership: WorkTrackMembership,
+  input: { organisationId: string; name?: string; description?: string | null; isActive?: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const org = await clientOrganisation(input.organisationId);
+  if (!org) return { ok: false, message: "Organisation not found." };
+
+  const set: Partial<typeof organisations.$inferInsert> = { updatedAt: new Date() };
+  if (input.name !== undefined) {
+    const checked = validateCatalogueName(input.name);
+    if (!checked.ok) return checked;
+    const duplicate = await findOrganisationDuplicate(org.kind, checked.name, org.id);
+    if (duplicate) {
+      return { ok: false, message: `An organisation named "${duplicate.name}" already exists.` };
+    }
+    set.name = checked.name;
+  }
+  if (input.description !== undefined) set.description = input.description?.trim() || null;
+  if (input.isActive !== undefined) set.isActive = input.isActive;
+
+  await db.update(organisations).set(set).where(eq(organisations.id, org.id));
+  await audit(membership, "organisation.update", "organisation", org.id, { name: org.name, isActive: org.isActive }, set);
+  return { ok: true, organisationId: org.id };
+}
+
+/**
+ * Manage an employee's work arrangement and client deployment.
+ * Reverting to in_house is always allowed. Switching to client_site requires
+ * an active client organisation; the employee's employer assignment is kept.
+ */
+export async function assignEmployeeClientAction(
+  membership: WorkTrackMembership,
+  input: { employeeId: string; workArrangement: "in_house" | "client_site"; clientOrganisationId?: string | null }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const employee = (
+    await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1)
+  )[0];
+  if (!employee) return { ok: false, message: "Employee not found." };
+
+  if (input.workArrangement === "in_house") {
+    await db
+      .update(employees)
+      .set({ workArrangement: "in_house", clientOrganisationId: null, updatedAt: new Date() })
+      .where(eq(employees.id, employee.id));
+    await audit(membership, "employee.arrangement", "employee", employee.id,
+      { workArrangement: employee.workArrangement, clientOrganisationId: employee.clientOrganisationId },
+      { workArrangement: "in_house", clientOrganisationId: null });
+    return { ok: true };
+  }
+
+  // client_site — enabled now that the client-site staff form exists (Phase 4).
+  const clientOrg = input.clientOrganisationId ? await clientOrganisation(input.clientOrganisationId) : undefined;
+  if (!clientOrg || clientOrg.kind !== "client") {
+    return { ok: false, message: "Choose a valid client organisation." };
+  }
+  if (!clientOrg.isActive) {
+    return { ok: false, message: "That client organisation is inactive." };
+  }
+  await db
+    .update(employees)
+    .set({ workArrangement: "client_site", clientOrganisationId: clientOrg.id, updatedAt: new Date() })
+    .where(eq(employees.id, employee.id));
+  await audit(membership, "employee.arrangement", "employee", employee.id,
+    { workArrangement: employee.workArrangement, clientOrganisationId: employee.clientOrganisationId },
+    { workArrangement: "client_site", clientOrganisationId: clientOrg.id });
+  return { ok: true };
+}
+
+async function categoriesForClient(clientOrganisationId: string) {
+  return db
+    .select()
+    .from(clientCategories)
+    .where(eq(clientCategories.clientOrganisationId, clientOrganisationId));
+}
+
+/** Admin-created catalogue rows are approved immediately. */
+export async function createClientCategoryAction(
+  membership: WorkTrackMembership,
+  input: { id: string; clientOrganisationId: string; name: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const org = await clientOrganisation(input.clientOrganisationId);
+  if (!org || org.kind !== "client") return { ok: false, message: "Choose a valid client organisation." };
+  if (!org.isActive) return { ok: false, message: "That client organisation is inactive." };
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+
+  const duplicate = findCatalogueDuplicate(await categoriesForClient(org.id), checked.name);
+  if (duplicate) {
+    return { ok: false, message: `"${duplicate.name}" already exists for ${org.name}. Use the existing category instead.` };
+  }
+  try {
+    await db.insert(clientCategories).values({
+      id: input.id,
+      clientOrganisationId: org.id,
+      name: checked.name,
+      approvalStatus: "approved",
+      createdByEmployeeId: membership.employeeId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("client_categories_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: `A category named "${checked.name}" already exists for ${org.name}.` };
+    }
+    throw e;
+  }
+  await audit(membership, "client_category.create", "client_category", input.id, null, {
+    clientOrganisationId: org.id,
+    name: checked.name,
+  });
+  return { ok: true, clientCategoryId: input.id };
+}
+
+export async function updateClientCategoryAction(
+  membership: WorkTrackMembership,
+  input: { categoryId: string; name?: string; isActive?: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const category = (
+    await db.select().from(clientCategories).where(eq(clientCategories.id, input.categoryId)).limit(1)
+  )[0];
+  if (!category) return { ok: false, message: "Category not found." };
+
+  const set: Partial<typeof clientCategories.$inferInsert> = { updatedAt: new Date() };
+  if (input.name !== undefined) {
+    const checked = validateCatalogueName(input.name);
+    if (!checked.ok) return checked;
+    const duplicate = findCatalogueDuplicate(await categoriesForClient(category.clientOrganisationId), checked.name, category.id);
+    if (duplicate) {
+      return { ok: false, message: `"${duplicate.name}" already exists for this client.` };
+    }
+    set.name = checked.name;
+  }
+  if (input.isActive !== undefined) set.isActive = input.isActive;
+
+  await db.update(clientCategories).set(set).where(eq(clientCategories.id, category.id));
+  await audit(membership, "client_category.update", "client_category", category.id, { name: category.name }, set);
+  return { ok: true, clientCategoryId: category.id };
+}
+
+/** Subcategory's client is derived from its parent category — scoping is enforced structurally. */
+export async function createClientSubcategoryAction(
+  membership: WorkTrackMembership,
+  input: { id: string; categoryId: string; name: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const category = (
+    await db.select().from(clientCategories).where(eq(clientCategories.id, input.categoryId)).limit(1)
+  )[0];
+  if (!category) return { ok: false, message: "Category not found." };
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+
+  const siblings = await db
+    .select()
+    .from(clientSubcategories)
+    .where(eq(clientSubcategories.categoryId, category.id));
+  const duplicate = findCatalogueDuplicate(siblings, checked.name);
+  if (duplicate) {
+    return { ok: false, message: `"${duplicate.name}" already exists under ${category.name}.` };
+  }
+  try {
+    await db.insert(clientSubcategories).values({
+      id: input.id,
+      clientOrganisationId: category.clientOrganisationId,
+      categoryId: category.id,
+      name: checked.name,
+      approvalStatus: "approved",
+      createdByEmployeeId: membership.employeeId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("client_subcategories_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: `A subcategory named "${checked.name}" already exists under ${category.name}.` };
+    }
+    throw e;
+  }
+  await audit(membership, "client_subcategory.create", "client_subcategory", input.id, null, {
+    categoryId: category.id,
+    clientOrganisationId: category.clientOrganisationId,
+    name: checked.name,
+  });
+  return { ok: true, clientSubcategoryId: input.id };
+}
+
+export async function updateClientSubcategoryAction(
+  membership: WorkTrackMembership,
+  input: { subcategoryId: string; name?: string; isActive?: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const subcategory = (
+    await db.select().from(clientSubcategories).where(eq(clientSubcategories.id, input.subcategoryId)).limit(1)
+  )[0];
+  if (!subcategory) return { ok: false, message: "Subcategory not found." };
+
+  const set: Partial<typeof clientSubcategories.$inferInsert> = { updatedAt: new Date() };
+  if (input.name !== undefined) {
+    const checked = validateCatalogueName(input.name);
+    if (!checked.ok) return checked;
+    const siblings = await db
+      .select()
+      .from(clientSubcategories)
+      .where(eq(clientSubcategories.categoryId, subcategory.categoryId));
+    const duplicate = findCatalogueDuplicate(siblings, checked.name, subcategory.id);
+    if (duplicate) {
+      return { ok: false, message: `"${duplicate.name}" already exists under this category.` };
+    }
+    set.name = checked.name;
+  }
+  if (input.isActive !== undefined) set.isActive = input.isActive;
+
+  await db.update(clientSubcategories).set(set).where(eq(clientSubcategories.id, subcategory.id));
+  await audit(membership, "client_subcategory.update", "client_subcategory", subcategory.id, { name: subcategory.name }, set);
+  return { ok: true, clientSubcategoryId: subcategory.id };
+}
+
+/**
+ * Approve or reject a pending staff suggestion. Rejection preserves the row
+ * and any historical references; approval (optionally after a rename) makes
+ * the item available to every staff member on that client. Staff cannot
+ * review their own suggestions.
+ */
+export async function reviewClientSuggestionAction(
+  membership: WorkTrackMembership,
+  input: {
+    itemKind: "category" | "subcategory";
+    id: string;
+    decision: "approve" | "reject";
+    name?: string;
+    note?: string;
+  }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+
+  const isCategory = input.itemKind === "category";
+  const categoryRow = isCategory
+    ? (await db.select().from(clientCategories).where(eq(clientCategories.id, input.id)).limit(1))[0]
+    : undefined;
+  const subcategoryRow = isCategory
+    ? undefined
+    : (await db.select().from(clientSubcategories).where(eq(clientSubcategories.id, input.id)).limit(1))[0];
+  const row = categoryRow ?? subcategoryRow;
+  if (!row) return { ok: false, message: "Suggestion not found." };
+  if (row.approvalStatus !== "pending") {
+    return { ok: false, message: "That suggestion has already been reviewed." };
+  }
+  if (!canReviewSuggestion(row.createdByEmployeeId, membership.employeeId)) {
+    return { ok: false, message: "You cannot review a suggestion you submitted yourself." };
+  }
+
+  const reviewedAt = new Date();
+  const nextStatus = input.decision === "approve" ? "approved" : "rejected";
+  const reviewNote = input.note?.trim() || null;
+  let nextName: string | undefined;
+
+  if (input.decision === "approve" && input.name !== undefined) {
+    const checked = validateCatalogueName(input.name);
+    if (!checked.ok) return checked;
+    const siblings = isCategory
+      ? await categoriesForClient(row.clientOrganisationId)
+      : await db
+          .select()
+          .from(clientSubcategories)
+          .where(eq(clientSubcategories.categoryId, subcategoryRow!.categoryId));
+    const duplicate = findCatalogueDuplicate(siblings, checked.name, row.id);
+    if (duplicate) {
+      return { ok: false, message: `"${duplicate.name}" already exists. Approve under that name or reject this suggestion.` };
+    }
+    nextName = checked.name;
+  }
+
+  if (categoryRow) {
+    await db
+      .update(clientCategories)
+      .set({
+        approvalStatus: nextStatus,
+        reviewedByMembershipId: membership.membershipId,
+        reviewedAt,
+        reviewNote,
+        ...(nextName !== undefined ? { name: nextName } : {}),
+        updatedAt: reviewedAt,
+      })
+      .where(eq(clientCategories.id, categoryRow.id));
+  } else if (subcategoryRow) {
+    await db
+      .update(clientSubcategories)
+      .set({
+        approvalStatus: nextStatus,
+        reviewedByMembershipId: membership.membershipId,
+        reviewedAt,
+        reviewNote,
+        ...(nextName !== undefined ? { name: nextName } : {}),
+        updatedAt: reviewedAt,
+      })
+      .where(eq(clientSubcategories.id, subcategoryRow.id));
+  }
+  await audit(
+    membership,
+    input.decision === "approve" ? "client_suggestion.approve" : "client_suggestion.reject",
+    isCategory ? "client_category" : "client_subcategory",
+    row.id,
+    { name: row.name, approvalStatus: row.approvalStatus },
+    { name: nextName ?? row.name, approvalStatus: nextStatus }
+  );
+  return { ok: true };
+}
+
+/* ------------------------- staff suggestions --------------------------- */
+
+/** Client-site staff suggest a missing category for their assigned client. */
+export async function suggestClientCategoryAction(
+  membership: WorkTrackMembership,
+  input: { id: string; name: string }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  const employee = (
+    await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1)
+  )[0];
+  if (!employee || employee.workArrangement !== "client_site" || !employee.clientOrganisationId) {
+    return { ok: false, message: "Only client-site staff can suggest client categories." };
+  }
+  const org = await clientOrganisation(employee.clientOrganisationId);
+  if (!org || !org.isActive) return { ok: false, message: "Your client organisation is not active." };
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+
+  const existing = findCatalogueDuplicate(await categoriesForClient(org.id), checked.name);
+  if (existing) {
+    return {
+      ok: false,
+      message:
+        existing.approvalStatus === "pending"
+          ? `"${existing.name}" is already awaiting review. You can keep using it for your reports.`
+          : `"${existing.name}" already exists for ${org.name}. Use the existing category instead.`,
+    };
+  }
+  try {
+    await db.insert(clientCategories).values({
+      id: input.id,
+      clientOrganisationId: org.id,
+      name: checked.name,
+      approvalStatus: "pending",
+      createdByEmployeeId: employeeId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("client_categories_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: `"${checked.name}" already exists or is awaiting review for ${org.name}.` };
+    }
+    throw e;
+  }
+  await audit(membership, "client_category.suggest", "client_category", input.id, null, {
+    clientOrganisationId: org.id,
+    name: checked.name,
+  });
+  return { ok: true, clientCategoryId: input.id };
+}
+
+/** Client-site staff suggest a missing subcategory under an approved category of their client. */
+export async function suggestClientSubcategoryAction(
+  membership: WorkTrackMembership,
+  input: { id: string; categoryId: string; name: string }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  const employee = (
+    await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1)
+  )[0];
+  if (!employee || employee.workArrangement !== "client_site" || !employee.clientOrganisationId) {
+    return { ok: false, message: "Only client-site staff can suggest client subcategories." };
+  }
+  const category = (
+    await db.select().from(clientCategories).where(eq(clientCategories.id, input.categoryId)).limit(1)
+  )[0];
+  // The category must belong to the employee's own client and be usable:
+  // approved+active, or the employee's own pending suggestion (so staff can
+  // suggest a subcategory under a category they just proposed).
+  const categoryUsable =
+    category &&
+    category.clientOrganisationId === employee.clientOrganisationId &&
+    category.isActive &&
+    (category.approvalStatus === "approved" ||
+      (category.approvalStatus === "pending" && category.createdByEmployeeId === employeeId));
+  if (!categoryUsable) {
+    return { ok: false, message: "Choose a category from your client's catalogue." };
+  }
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+
+  const siblings = await db
+    .select()
+    .from(clientSubcategories)
+    .where(eq(clientSubcategories.categoryId, category.id));
+  const existing = findCatalogueDuplicate(siblings, checked.name);
+  if (existing) {
+    return {
+      ok: false,
+      message:
+        existing.approvalStatus === "pending"
+          ? `"${existing.name}" is already awaiting review. You can keep using it for your reports.`
+          : `"${existing.name}" already exists under ${category.name}. Use the existing subcategory instead.`,
+    };
+  }
+  try {
+    await db.insert(clientSubcategories).values({
+      id: input.id,
+      clientOrganisationId: category.clientOrganisationId,
+      categoryId: category.id,
+      name: checked.name,
+      approvalStatus: "pending",
+      createdByEmployeeId: employeeId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("client_subcategories_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: `"${checked.name}" already exists or is awaiting review under ${category.name}.` };
+    }
+    throw e;
+  }
+  await audit(membership, "client_subcategory.suggest", "client_subcategory", input.id, null, {
+    categoryId: category.id,
+    clientOrganisationId: category.clientOrganisationId,
+    name: checked.name,
+  });
+  return { ok: true, clientSubcategoryId: input.id };
 }

@@ -58,7 +58,7 @@ function ActivityEntryCard({
 }: {
   entry: WorkEntry;
   name: string;
-  status: TaskStatus;
+  status?: TaskStatus;
 }) {
   return (
     <div className="rounded-xl border border-[#EFEAF6] bg-white px-3 py-2.5">
@@ -80,7 +80,7 @@ function ActivityEntryCard({
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="text-[11px] font-medium text-[#39364F]">{name}</span>
-        <ActivityStatusBadge status={status} />
+        {status ? <ActivityStatusBadge status={status} /> : null}
         <span className="text-[10px] text-[#9292A8]">{activityLocationLabel(entry.workLocation)}</span>
       </div>
       <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-[#666783]">{entry.description.trim() || "—"}</p>
@@ -210,6 +210,60 @@ function ActivityTaskCard({
   );
 }
 
+/** Client-site entries grouped under their client organisation. */
+function ActivityClientCard({ entries, db }: { entries: WorkEntry[]; db: WorkLogDatabase }) {
+  const sorted = [...entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const first = sorted[0];
+  const category = first.clientCategoryId
+    ? db.clientCategories.find((row) => row.id === first.clientCategoryId)
+    : undefined;
+  const subcategory = first.clientSubcategoryId
+    ? db.clientSubcategories.find((row) => row.id === first.clientSubcategoryId)
+    : undefined;
+  const org = category?.clientOrganisationId
+    ? db.organisations.find((row) => row.id === category.clientOrganisationId)
+    : subcategory?.clientOrganisationId
+      ? db.organisations.find((row) => row.id === subcategory.clientOrganisationId)
+      : undefined;
+  const minutes = sorted.reduce((total, entry) => total + durationMinutes(entry.startAt, entry.endAt), 0);
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[#EAE8F2] bg-white shadow-[0_1px_2px_rgba(23,23,43,0.04)]">
+      <div className="flex items-center gap-2 bg-[#F5F1FF] px-3.5 py-3">
+        <Folder size={14} aria-hidden="true" className="shrink-0 text-[#6040E8]" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-bold text-[#17172B]">
+            {org?.name ?? "Client site"}
+          </span>
+          <span className="block truncate text-[11px] font-medium text-[#9292A8]">
+            Client work · {sorted.length} {sorted.length === 1 ? "entry" : "entries"} · {formatMinutes(minutes)}
+          </span>
+        </span>
+        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-[#6B6785]">
+          Client
+        </span>
+      </div>
+      <div className="space-y-2 p-3">
+        {sorted.map((entry) => {
+          const cat = entry.clientCategoryId
+            ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+            : undefined;
+          const sub = entry.clientSubcategoryId
+            ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+            : undefined;
+          return (
+            <ActivityEntryCard
+              key={entry.id}
+              entry={entry}
+              name={[cat?.name, sub?.name].filter(Boolean).join(" › ") || "Client work"}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function ActivityBreakCard({ brk }: { brk: BreakEntry }) {
   return (
     <div className="flex items-center gap-2.5 rounded-2xl border border-[#F6E7CF] bg-[#FFF9ED] px-3.5 py-3">
@@ -266,8 +320,30 @@ export function EmployeeDetailMobile({
   const day = getDaySummary(db, employee.id, viewDate, now);
   const hierarchy = buildEmployeeHierarchy(db, employee.id, viewDate);
 
+  // Client-site entries group by client organisation (they have no task).
+  const clientEntriesByOrg = new Map<string, WorkEntry[]>();
+  for (const entry of day.entries) {
+    if (entry.taskId) continue;
+    const cat = entry.clientCategoryId
+      ? db.clientCategories.find((row) => row.id === entry.clientCategoryId)
+      : undefined;
+    const sub = entry.clientSubcategoryId
+      ? db.clientSubcategories.find((row) => row.id === entry.clientSubcategoryId)
+      : undefined;
+    const orgId = cat?.clientOrganisationId ?? sub?.clientOrganisationId ?? "";
+    const list = clientEntriesByOrg.get(orgId) ?? [];
+    list.push(entry);
+    clientEntriesByOrg.set(orgId, list);
+  }
+
   const blocks = [
     ...(hierarchy?.tasks ?? []).map((item) => ({ kind: "task" as const, at: item.firstStartAt, item })),
+    ...[...clientEntriesByOrg.entries()].map(([orgId, entries]) => ({
+      kind: "client" as const,
+      at: entries.reduce((earliest, entry) => (entry.startAt < earliest ? entry.startAt : earliest), entries[0].startAt),
+      orgId,
+      entries,
+    })),
     ...day.breaks.map((brk) => ({ kind: "break" as const, at: brk.startAt, brk })),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
@@ -314,6 +390,12 @@ export function EmployeeDetailMobile({
               <h2 className="truncate text-lg font-bold text-[#17172B]">{employee.name}</h2>
               <p className="truncate text-[13px] text-[#666783]">
                 {employee.role} · {employee.department}
+              </p>
+              <p className="truncate text-[11px] text-[#8B8B9A]">
+                {employee.employerOrganisationName ?? "Employer —"}
+                {employee.workArrangement === "client_site"
+                  ? ` · Client: ${employee.clientOrganisationName ?? "—"}`
+                  : " · In-house"}
               </p>
             </div>
           </section>
@@ -385,6 +467,8 @@ export function EmployeeDetailMobile({
               blocks.map((block) =>
                 block.kind === "break" ? (
                   <ActivityBreakCard key={`break-${block.brk.id}`} brk={block.brk} />
+                ) : block.kind === "client" ? (
+                  <ActivityClientCard key={`client-${block.orgId}`} entries={block.entries} db={db} />
                 ) : (
                   <ActivityTaskCard
                     key={block.item.task.id}
