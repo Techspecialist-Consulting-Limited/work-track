@@ -1015,6 +1015,34 @@ export function createClientOrganisation(input: {
   return syncAction("createClientOrganisation", { id: newId(), ...input });
 }
 
+export function createEmployerOrganisation(input: {
+  name: string;
+  description?: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("createEmployerOrganisation", { id: newId(), ...input });
+}
+
+/* ------------------------- employee invitations ------------------------- */
+
+export function createEmployeeInvitation(input: {
+  email: string;
+  role: "staff" | "hr";
+  employerOrganisationId: string;
+  workArrangement: "in_house" | "client_site";
+  clientOrganisationId?: string | null;
+  teamId?: string | null;
+}): Promise<SyncResponse | null> {
+  return syncAction("createEmployeeInvitation", { id: newId(), ...input });
+}
+
+export function resendEmployeeInvitation(invitationId: string): Promise<SyncResponse | null> {
+  return syncAction("resendEmployeeInvitation", { invitationId });
+}
+
+export function revokeEmployeeInvitation(invitationId: string): Promise<SyncResponse | null> {
+  return syncAction("revokeEmployeeInvitation", { invitationId });
+}
+
 export function updateOrganisation(input: {
   organisationId: string;
   name?: string;

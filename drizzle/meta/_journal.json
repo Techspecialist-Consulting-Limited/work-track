@@ -64,6 +64,13 @@
       "when": 1794500000000,
       "tag": "0008_client_site_reporting",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0010_employee_invitations",
+      "breakpoints": true
     }
   ]
 }

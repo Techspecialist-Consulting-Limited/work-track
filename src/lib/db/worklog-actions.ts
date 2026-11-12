@@ -43,6 +43,16 @@ import {
 } from "@/lib/worklog/client-catalogue";
 import { getZonedDateKey, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
 import { splitIntervalMinutes } from "@/lib/worklog/time";
+import {
+  encryptInvitationToken,
+  generateInvitationToken,
+  hashInvitationToken,
+  invitationExpiry,
+  invitationStatus,
+  normalizeEmail,
+  validateInvitationAssignment,
+  type InvitableRole,
+} from "@/lib/worklog/invitations";
 import type { TaskStatus, WorkLogDatabase } from "@/lib/worklog/types";
 
 export type ActionResult =
@@ -59,6 +69,9 @@ export type ActionResult =
       organisationId?: string;
       clientCategoryId?: string;
       clientSubcategoryId?: string;
+      /** Raw single-use token — returned once so the admin can copy the link. */
+      inviteToken?: string;
+      inviteId?: string;
     }
   | {
       ok: false;
@@ -2126,4 +2139,287 @@ export async function suggestClientSubcategoryAction(
     name: checked.name,
   });
   return { ok: true, clientSubcategoryId: input.id };
+}
+
+/* ------------------------------------------------------------------ */
+/* Employee invitations (config-admin managed, token-based)            */
+/* ------------------------------------------------------------------ */
+
+async function employeeInvitationRow(invitationId: string) {
+  return (
+    await db.select().from(invitations).where(eq(invitations.id, invitationId)).limit(1)
+  )[0];
+}
+
+/** Creates or refreshes a pending employee invitation and returns the raw token once. */
+export async function createEmployeeInvitationAction(
+  membership: WorkTrackMembership,
+  input: {
+    id: string;
+    email: string;
+    role: string;
+    employerOrganisationId: string;
+    workArrangement: string;
+    clientOrganisationId?: string | null;
+    teamId?: string | null;
+  }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+
+  const email = normalizeEmail(input.email);
+  const checked = validateInvitationAssignment({ ...input, email });
+  if (!checked.ok) return checked;
+
+  const employer = await clientOrganisation(input.employerOrganisationId);
+  if (!employer || employer.kind !== "employer" || !employer.isActive) {
+    return { ok: false, message: "Select an active employer organisation." };
+  }
+  if (input.workArrangement === "client_site") {
+    const client = input.clientOrganisationId ? await clientOrganisation(input.clientOrganisationId) : undefined;
+    if (!client || client.kind !== "client" || !client.isActive) {
+      return { ok: false, message: "Select an active client organisation for client-site staff." };
+    }
+  }
+  if (input.teamId) {
+    const team = (await db.select().from(teams).where(eq(teams.id, input.teamId)).limit(1))[0];
+    if (!team || !team.isActive) return { ok: false, message: "Select an active team." };
+  }
+
+  const token = generateInvitationToken();
+  const values = {
+    email,
+    role: input.role as InvitableRole | "chairman",
+    invitedByMembershipId: membership.membershipId,
+    tokenHash: hashInvitationToken(token),
+    tokenCipher: encryptInvitationToken(token),
+    expiresAt: invitationExpiry(),
+    revokedAt: null,
+    acceptedAt: null,
+    employerOrganisationId: input.employerOrganisationId,
+    clientOrganisationId: input.workArrangement === "client_site" ? input.clientOrganisationId! : null,
+    workArrangement: input.workArrangement,
+    teamId: input.teamId ?? null,
+    updatedAt: new Date(),
+  };
+  try {
+    await db
+      .insert(invitations)
+      .values({ id: input.id, ...values })
+      .onConflictDoUpdate({
+        target: [invitations.email, invitations.role],
+        set: values,
+      });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("duplicate key")) {
+      return { ok: false, message: "A pending invitation already exists for this email and role." };
+    }
+    throw e;
+  }
+  await audit(membership, "member.invite_employee", "invitation", input.id, null, {
+    email,
+    role: input.role,
+    employerOrganisationId: input.employerOrganisationId,
+    workArrangement: input.workArrangement,
+    clientOrganisationId: values.clientOrganisationId,
+  });
+  return { ok: true, inviteId: input.id, inviteToken: token };
+}
+
+/** Regenerates the token and expiry for a pending invitation (resend). */
+export async function resendEmployeeInvitationAction(
+  membership: WorkTrackMembership,
+  input: { invitationId: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const invite = await employeeInvitationRow(input.invitationId);
+  if (!invite) return { ok: false, message: "Invitation not found." };
+  if (invitationStatus(invite) !== "pending") {
+    return { ok: false, message: "Only pending invitations can be resent." };
+  }
+  const token = generateInvitationToken();
+  await db
+    .update(invitations)
+    .set({
+      tokenHash: hashInvitationToken(token),
+      tokenCipher: encryptInvitationToken(token),
+      expiresAt: invitationExpiry(),
+      updatedAt: new Date(),
+    })
+    .where(eq(invitations.id, invite.id));
+  await audit(membership, "member.invite_resend", "invitation", invite.id, null, { email: invite.email });
+  return { ok: true, inviteId: invite.id, inviteToken: token };
+}
+
+export async function revokeEmployeeInvitationAction(
+  membership: WorkTrackMembership,
+  input: { invitationId: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const invite = await employeeInvitationRow(input.invitationId);
+  if (!invite) return { ok: false, message: "Invitation not found." };
+  if (invitationStatus(invite) !== "pending") {
+    return { ok: false, message: "Only pending invitations can be revoked." };
+  }
+  await db
+    .update(invitations)
+    .set({ revokedAt: new Date(), updatedAt: new Date() })
+    .where(eq(invitations.id, invite.id));
+  await audit(membership, "member.invite_revoke", "invitation", invite.id, null, { email: invite.email });
+  return { ok: true };
+}
+
+/**
+ * Redeems a token invitation after Entra sign-in. The invited email must match
+ * the authenticated identity; all assignments come from the stored invitation.
+ */
+export async function acceptEmployeeInvitation(
+  identity: { oid?: string; tid?: string; email?: string | null; name?: string | null },
+  rawToken: string
+): Promise<{ ok: true; role: "staff" | "hr" } | { ok: false; message: string }> {
+  if (!identity.oid || !identity.tid || !identity.email) {
+    return { ok: false, message: "Your Microsoft account could not be verified." };
+  }
+  const tokenHash = hashInvitationToken(rawToken);
+  const invite = (
+    await db.select().from(invitations).where(eq(invitations.tokenHash, tokenHash)).limit(1)
+  )[0];
+  if (!invite || !invite.tokenHash) {
+    return { ok: false, message: "This invitation link is invalid." };
+  }
+  const status = invitationStatus(invite);
+  if (status === "accepted") return { ok: false, message: "This invitation has already been used." };
+  if (status === "revoked") return { ok: false, message: "This invitation has been revoked." };
+  if (status === "expired") return { ok: false, message: "This invitation has expired. Ask your administrator for a new one." };
+  if (invite.email !== normalizeEmail(identity.email)) {
+    return { ok: false, message: "This invitation was issued to a different email address." };
+  }
+  if (invite.role !== "staff" && invite.role !== "hr") {
+    return { ok: false, message: "This invitation cannot be redeemed here." };
+  }
+
+  // Reuse an existing employee profile for this Entra identity when present.
+  const existingMemberships = await db
+    .select({ employeeId: memberships.employeeId })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.microsoftTenantId, identity.tid),
+        eq(memberships.microsoftObjectId, identity.oid)
+      )
+    );
+  let employeeId = existingMemberships.find((row) => row.employeeId)?.employeeId ?? null;
+
+  if (employeeId) {
+    await db
+      .update(employees)
+      .set({
+        employerOrganisationId: invite.employerOrganisationId ?? undefined,
+        workArrangement: invite.workArrangement ?? "in_house",
+        clientOrganisationId: invite.workArrangement === "client_site" ? invite.clientOrganisationId : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(employees.id, employeeId));
+  } else {
+    const employeeCode = `emp-${identity.oid.slice(0, 8)}`;
+    const fullName =
+      identity.name?.trim() ||
+      identity.email.split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    employeeId = (
+      await db
+        .insert(employees)
+        .values({
+          employeeCode,
+          fullName,
+          jobTitle: "Team Member",
+          department: "",
+          employerOrganisationId: invite.employerOrganisationId ?? null,
+          workArrangement: invite.workArrangement ?? "in_house",
+          clientOrganisationId: invite.workArrangement === "client_site" ? invite.clientOrganisationId : null,
+        })
+        .returning({ id: employees.id })
+    )[0]?.id ?? null;
+  }
+ 
+  if (!employeeId) return { ok: false, message: "Your employee profile could not be created." };
+
+  if (invite.teamId) {
+    await db
+      .insert(employeeTeams)
+      .values({ employeeId, teamId: invite.teamId })
+      .onConflictDoNothing();
+  }
+
+  await db
+    .insert(memberships)
+    .values({
+      role: invite.role,
+      microsoftTenantId: identity.tid,
+      microsoftObjectId: identity.oid,
+      employeeId,
+      isActive: true,
+      activeTeamId: invite.teamId ?? null,
+    })
+    .onConflictDoNothing();
+  await db
+    .update(memberships)
+    .set({ isActive: true, employeeId, activeTeamId: invite.teamId ?? null, updatedAt: new Date() })
+    .where(
+      and(
+        eq(memberships.microsoftTenantId, identity.tid),
+        eq(memberships.microsoftObjectId, identity.oid),
+        eq(memberships.role, invite.role),
+        eq(memberships.isActive, false)
+      )
+    );
+
+  await db
+    .update(invitations)
+    .set({ acceptedAt: new Date(), updatedAt: new Date() })
+    .where(eq(invitations.id, invite.id));
+  await db.insert(auditEvents).values({
+    action: "member.invite_accept",
+    entityType: "invitation",
+    entityId: invite.id,
+    newValues: { email: invite.email, role: invite.role, employeeId },
+  });
+  return { ok: true, role: invite.role as "staff" | "hr" };
+}
+
+/** Config admins can create employer organisations (kind is immutable). */
+export async function createEmployerOrganisationAction(
+  membership: WorkTrackMembership,
+  input: { id: string; name: string; description?: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+  const duplicate = await findOrganisationDuplicate("employer", checked.name);
+  if (duplicate) {
+    return { ok: false, message: `An employer organisation named "${duplicate.name}" already exists.` };
+  }
+  try {
+    await db.insert(organisations).values({
+      id: input.id,
+      name: checked.name,
+      kind: "employer",
+      description: input.description?.trim() || null,
+      createdByMembershipId: membership.membershipId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("organisations_kind_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: "An employer organisation with that name already exists." };
+    }
+    throw e;
+  }
+  await audit(membership, "organisation.create", "organisation", input.id, null, {
+    name: checked.name,
+    kind: "employer",
+  });
+  return { ok: true, organisationId: input.id };
 }

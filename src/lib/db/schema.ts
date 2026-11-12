@@ -549,9 +549,27 @@ export const invitations = pgTable(
     role: membershipRoleEnum("role").notNull(),
     invitedByMembershipId: uuid("invited_by_membership_id").references(() => memberships.id),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    /** sha256 of the single-use token; NULL for legacy chairman email invites. */
+    tokenHash: text("token_hash"),
+    /** AES-GCM ciphertext of the raw token so admins can re-copy the invite link. */
+    tokenCipher: text("token_cipher"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    employerOrganisationId: uuid("employer_organisation_id").references(() => organisations.id),
+    clientOrganisationId: uuid("client_organisation_id").references(() => organisations.id),
+    workArrangement: text("work_arrangement"),
+    teamId: uuid("team_id").references(() => teams.id),
     ...timestamps,
   },
-  (t) => [uniqueIndex("invitations_email_role_key").on(t.email, t.role)]
+  (t) => [
+    uniqueIndex("invitations_email_role_key").on(t.email, t.role),
+    uniqueIndex("invitations_token_hash_key").on(t.tokenHash).where(sql`${t.tokenHash} IS NOT NULL`),
+    index("invitations_email_idx").on(t.email),
+    check(
+      "invitations_work_arrangement_check",
+      sql`${t.workArrangement} IS NULL OR ${t.workArrangement} IN ('in_house', 'client_site')`
+    ),
+  ]
 );
 
 export const worktrackSettings = pgTable("worktrack_settings", {

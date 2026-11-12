@@ -8,10 +8,12 @@ import {
   autoProvisionMembership,
   getMembership,
   hasAnyMembership,
+  INVITE_TOKEN_COOKIE,
   LOGIN_ROLE_COOKIE,
   redeemInvitation,
   type WorkTrackRole,
 } from "@/lib/auth/authorize";
+import { acceptEmployeeInvitation } from "@/lib/db/worklog-actions";
 
 const ROLE_HOME: Record<WorkTrackRole, string> = {
   staff: "/",
@@ -36,6 +38,28 @@ async function CompleteContent({
 
   const store = await cookies();
   const requested = store.get(LOGIN_ROLE_COOKIE)?.value as WorkTrackRole | undefined;
+
+  // Token invitation redemption takes precedence over the role-selection flow.
+  const inviteToken = store.get(INVITE_TOKEN_COOKIE)?.value;
+  if (inviteToken) {
+    const accepted = await acceptEmployeeInvitation(
+      {
+        oid: (session.user as { oid?: string }).oid,
+        tid: (session.user as { tid?: string }).tid,
+        email: session.user.email,
+        name: session.user.name,
+      },
+      inviteToken
+    );
+    if (accepted.ok) redirect(ROLE_HOME[accepted.role]);
+    return (
+      <AuthMessage
+        title="Invitation could not be accepted"
+        body={accepted.message}
+        showRetry
+      />
+    );
+  }
 
   // First login only: staff/HR self-provision (Entra sign-in = company
   // account). Existing members never gain extra roles this way, and

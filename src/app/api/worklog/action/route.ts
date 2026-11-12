@@ -9,6 +9,10 @@ import {
   assignEmployeeTeamAction,
   createClientCategoryAction,
   createClientOrganisationAction,
+  createEmployeeInvitationAction,
+  createEmployerOrganisationAction,
+  resendEmployeeInvitationAction,
+  revokeEmployeeInvitationAction,
   createClientSubcategoryAction,
   createStaffProjectAction,
   createSubtaskAction,
@@ -154,6 +158,18 @@ export async function POST(request: Request) {
         break;
       case "createClientOrganisation":
         result = await createClientOrganisationAction(membership, p as never);
+        break;
+      case "createEmployerOrganisation":
+        result = await createEmployerOrganisationAction(membership, p as never);
+        break;
+      case "createEmployeeInvitation":
+        result = await createEmployeeInvitationAction(membership, p as never);
+        break;
+      case "resendEmployeeInvitation":
+        result = await resendEmployeeInvitationAction(membership, p as never);
+        break;
+      case "revokeEmployeeInvitation":
+        result = await revokeEmployeeInvitationAction(membership, p as never);
         break;
       case "updateOrganisation":
         result = await updateOrganisationAction(membership, p as never);

@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, Users, Zap } from "lucide-react";
+import { Building2, MailPlus, Users, Zap } from "lucide-react";
 import { TeamsAdmin } from "./TeamsAdmin";
 import { ClientReportingAdmin } from "./ClientReportingAdmin";
+import { InvitationsAdmin } from "./InvitationsAdmin";
 
-type AdminSection = "teams" | "client-reporting";
+type AdminSection = "teams" | "client-reporting" | "invitations";
 
 const SECTIONS: { id: AdminSection; label: string; icon: typeof Users }[] = [
   { id: "teams", label: "Teams & Projects", icon: Users },
   { id: "client-reporting", label: "Client-site Reporting", icon: Building2 },
+  { id: "invitations", label: "Invitations", icon: MailPlus },
 ];
 
 /** Configuration home: teams/projects and client-site reporting in one place. */
@@ -46,7 +48,13 @@ export function AdminConfigTabs() {
           </nav>
         </div>
       </div>
-      {section === "teams" ? <TeamsAdmin /> : <ClientReportingAdmin />}
+      {section === "teams" ? (
+        <TeamsAdmin />
+      ) : section === "client-reporting" ? (
+        <ClientReportingAdmin />
+      ) : (
+        <InvitationsAdmin />
+      )}
     </div>
   );
 }
