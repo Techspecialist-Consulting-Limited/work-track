@@ -1,9 +1,12 @@
 import "server-only";
-import { and, asc, eq, gt, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db } from "./index";
 import {
   auditEvents,
+  catalogueTemplateCategories,
+  catalogueTemplateSubcategories,
+  catalogueTemplates,
   clientCategories,
   clientSubcategories,
   employees,
@@ -44,6 +47,12 @@ import {
 import { getZonedDateKey, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
 import { splitIntervalMinutes } from "@/lib/worklog/time";
 import {
+  planTemplateApplication,
+  validateTemplateTree,
+  type TemplateCategoryInput,
+  type TemplateCategoryNode,
+} from "@/lib/worklog/catalogue-templates";
+import {
   encryptInvitationToken,
   generateInvitationToken,
   hashInvitationToken,
@@ -72,6 +81,10 @@ export type ActionResult =
       /** Raw single-use token — returned once so the admin can copy the link. */
       inviteToken?: string;
       inviteId?: string;
+      templateId?: string;
+      /** Categories/subcategories created by a template application. */
+      addedCategories?: number;
+      addedSubcategories?: number;
     }
   | {
       ok: false;
@@ -2422,4 +2435,403 @@ export async function createEmployerOrganisationAction(
     kind: "employer",
   });
   return { ok: true, organisationId: input.id };
+}
+
+/* ------------------------------------------------------------------ */
+/* Catalogue template library                                          */
+/* ------------------------------------------------------------------ */
+
+async function templateWithTree(templateId: string) {
+  const template = (
+    await db.select().from(catalogueTemplates).where(eq(catalogueTemplates.id, templateId)).limit(1)
+  )[0];
+  if (!template) return null;
+  const cats = await db
+    .select()
+    .from(catalogueTemplateCategories)
+    .where(eq(catalogueTemplateCategories.templateId, templateId))
+    .orderBy(asc(catalogueTemplateCategories.sortOrder), asc(catalogueTemplateCategories.name));
+  const subs = cats.length
+    ? await db
+        .select()
+        .from(catalogueTemplateSubcategories)
+        .where(inArray(catalogueTemplateSubcategories.templateCategoryId, cats.map((c) => c.id)))
+        .orderBy(asc(catalogueTemplateSubcategories.sortOrder), asc(catalogueTemplateSubcategories.name))
+    : [];
+  const subsByCat = new Map<string, typeof subs>();
+  for (const sub of subs) {
+    const list = subsByCat.get(sub.templateCategoryId) ?? [];
+    list.push(sub);
+    subsByCat.set(sub.templateCategoryId, list);
+  }
+  const tree: TemplateCategoryNode[] = cats.map((cat) => ({
+    id: cat.id,
+    name: cat.name,
+    sortOrder: cat.sortOrder,
+    subcategories: (subsByCat.get(cat.id) ?? []).map((sub) => ({
+      id: sub.id,
+      name: sub.name,
+      sortOrder: sub.sortOrder,
+    })),
+  }));
+  return { template, tree };
+}
+
+/** Copies a client's approved+active catalogue into a new template. Read-only on the client. */
+export async function saveClientCatalogueAsTemplateAction(
+  membership: WorkTrackMembership,
+  input: { id: string; clientOrganisationId: string; name: string; description?: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const org = await clientOrganisation(input.clientOrganisationId);
+  if (!org || org.kind !== "client") return { ok: false, message: "Choose a valid client organisation." };
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+
+  const cats = (await categoriesForClient(org.id)).filter(
+    (row) => row.approvalStatus === "approved" && row.isActive
+  );
+  if (cats.length === 0) {
+    return { ok: false, message: `${org.name} has no approved categories to save as a template.` };
+  }
+  const subs = cats.length
+    ? await db
+        .select()
+        .from(clientSubcategories)
+        .where(
+          and(
+            eq(clientSubcategories.clientOrganisationId, org.id),
+            inArray(clientSubcategories.categoryId, cats.map((c) => c.id))
+          )
+        )
+    : [];
+  const subsByCat = new Map<string, typeof subs>();
+  for (const sub of subs) {
+    if (sub.approvalStatus !== "approved" || !sub.isActive) continue;
+    const list = subsByCat.get(sub.categoryId) ?? [];
+    list.push(sub);
+    subsByCat.set(sub.categoryId, list);
+  }
+
+  try {
+    await db.insert(catalogueTemplates).values({
+      id: input.id,
+      name: checked.name,
+      description: input.description?.trim() || null,
+      createdByMembershipId: membership.membershipId,
+    });
+    for (const [index, cat] of cats.entries()) {
+      const catId = crypto.randomUUID();
+      await db.insert(catalogueTemplateCategories).values({
+        id: catId,
+        templateId: input.id,
+        name: cat.name,
+        sortOrder: index,
+      });
+      const catSubs = subsByCat.get(cat.id) ?? [];
+      for (const [sIndex, sub] of catSubs.entries()) {
+        await db.insert(catalogueTemplateSubcategories).values({
+          id: crypto.randomUUID(),
+          templateCategoryId: catId,
+          name: sub.name,
+          sortOrder: sIndex,
+        });
+      }
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("catalogue_templates_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: `A template named "${checked.name}" already exists.` };
+    }
+    throw e;
+  }
+  await audit(membership, "catalogue_template.save_client", "catalogue_template", input.id, null, {
+    clientOrganisationId: org.id,
+    name: checked.name,
+    categoryCount: cats.length,
+  });
+  return { ok: true, templateId: input.id };
+}
+
+/** Creates or replaces a template's full category tree. Children are rebuilt; applied client data is unaffected. */
+export async function saveCatalogueTemplateAction(
+  membership: WorkTrackMembership,
+  input: {
+    templateId?: string;
+    name: string;
+    description?: string;
+    categories: TemplateCategoryInput[];
+  }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const checked = validateCatalogueName(input.name);
+  if (!checked.ok) return checked;
+  const tree = validateTemplateTree(input.categories);
+  if (!tree.ok) return tree;
+
+  const existing = input.templateId
+    ? (await db.select().from(catalogueTemplates).where(eq(catalogueTemplates.id, input.templateId)).limit(1))[0]
+    : undefined;
+  if (input.templateId && !existing) return { ok: false, message: "Template not found." };
+
+  const templateId = input.templateId ?? crypto.randomUUID();
+  try {
+    await db.transaction(async (tx) => {
+      if (existing) {
+        // Rebuild children: template internals are disposable snapshots.
+        const oldCats = await tx
+          .select({ id: catalogueTemplateCategories.id })
+          .from(catalogueTemplateCategories)
+          .where(eq(catalogueTemplateCategories.templateId, templateId));
+        if (oldCats.length) {
+          await tx
+            .delete(catalogueTemplateSubcategories)
+            .where(inArray(catalogueTemplateSubcategories.templateCategoryId, oldCats.map((c) => c.id)));
+          await tx
+            .delete(catalogueTemplateCategories)
+            .where(eq(catalogueTemplateCategories.templateId, templateId));
+        }
+        await tx
+          .update(catalogueTemplates)
+          .set({ name: checked.name, description: input.description?.trim() || null, updatedAt: new Date() })
+          .where(eq(catalogueTemplates.id, templateId));
+      } else {
+        await tx.insert(catalogueTemplates).values({
+          id: templateId,
+          name: checked.name,
+          description: input.description?.trim() || null,
+          createdByMembershipId: membership.membershipId,
+        });
+      }
+      for (const [cIndex, cat] of input.categories.entries()) {
+        const catId = crypto.randomUUID();
+        await tx.insert(catalogueTemplateCategories).values({
+          id: catId,
+          templateId,
+          name: cat.name.trim().replace(/\s+/g, " "),
+          sortOrder: cIndex,
+        });
+        for (const [sIndex, sub] of cat.subcategories.entries()) {
+          await tx.insert(catalogueTemplateSubcategories).values({
+            id: crypto.randomUUID(),
+            templateCategoryId: catId,
+            name: sub.name.trim().replace(/\s+/g, " "),
+            sortOrder: sIndex,
+          });
+        }
+      }
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg.includes("catalogue_templates_name_key") || msg.includes("duplicate key")) {
+      return { ok: false, message: `A template named "${checked.name}" already exists.` };
+    }
+    throw e;
+  }
+  await audit(
+    membership,
+    existing ? "catalogue_template.update" : "catalogue_template.create",
+    "catalogue_template",
+    templateId,
+    existing ? { name: existing.name } : null,
+    { name: checked.name, categoryCount: input.categories.length }
+  );
+  return { ok: true, templateId };
+}
+
+export async function deleteCatalogueTemplateAction(
+  membership: WorkTrackMembership,
+  input: { templateId: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const template = (
+    await db.select().from(catalogueTemplates).where(eq(catalogueTemplates.id, input.templateId)).limit(1)
+  )[0];
+  if (!template) return { ok: false, message: "Template not found." };
+  // Children cascade; client catalogue rows are independent and untouched.
+  await db.delete(catalogueTemplates).where(eq(catalogueTemplates.id, template.id));
+  await audit(membership, "catalogue_template.delete", "catalogue_template", template.id, { name: template.name }, null);
+  return { ok: true };
+}
+
+/**
+ * Applies selected template categories to a client organisation. Creates only
+ * missing categories/subcategories as approved+active admin rows; existing
+ * names are never overwritten. Runs in one transaction.
+ */
+export async function applyCatalogueTemplateAction(
+  membership: WorkTrackMembership,
+  input: { clientOrganisationId: string; templateId: string; categoryIds: string[] }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const org = await clientOrganisation(input.clientOrganisationId);
+  if (!org || org.kind !== "client") return { ok: false, message: "Choose a valid client organisation." };
+  const loaded = await templateWithTree(input.templateId);
+  if (!loaded) return { ok: false, message: "Template not found." };
+  const selected = new Set(input.categoryIds);
+  const selectedNodes = loaded.tree.filter((cat) => selected.has(cat.id));
+  if (selectedNodes.length === 0) return { ok: false, message: "Select at least one category to apply." };
+
+  const existingCats = await categoriesForClient(org.id);
+  const existingSubs = existingCats.length
+    ? await db
+        .select()
+        .from(clientSubcategories)
+        .where(
+          and(
+            eq(clientSubcategories.clientOrganisationId, org.id),
+            inArray(clientSubcategories.categoryId, existingCats.map((c) => c.id))
+          )
+        )
+    : [];
+  const plan = planTemplateApplication(selectedNodes, existingCats, existingSubs);
+  const addedCategories = plan.newCategories.length;
+  const addedSubcategories =
+    plan.newCategories.reduce((total, cat) => total + cat.subcategories.length, 0) +
+    plan.additionsToExisting.reduce((total, cat) => total + cat.subcategories.length, 0);
+  if (addedCategories === 0 && addedSubcategories === 0) {
+    return { ok: false, message: "Nothing to add — the selected categories already exist for this client." };
+  }
+
+  await db.transaction(async (tx) => {
+    for (const addition of plan.additionsToExisting) {
+      for (const sub of addition.subcategories) {
+        await tx.insert(clientSubcategories).values({
+          id: crypto.randomUUID(),
+          clientOrganisationId: org.id,
+          categoryId: addition.categoryId,
+          name: sub.name,
+          approvalStatus: "approved",
+          isActive: true,
+          createdByEmployeeId: membership.employeeId,
+        });
+      }
+    }
+    for (const cat of plan.newCategories) {
+      const newCatId = crypto.randomUUID();
+      await tx.insert(clientCategories).values({
+        id: newCatId,
+        clientOrganisationId: org.id,
+        name: cat.name,
+        approvalStatus: "approved",
+        isActive: true,
+        createdByEmployeeId: membership.employeeId,
+      });
+      for (const sub of cat.subcategories) {
+        await tx.insert(clientSubcategories).values({
+          id: crypto.randomUUID(),
+          clientOrganisationId: org.id,
+          categoryId: newCatId,
+          name: sub.name,
+          approvalStatus: "approved",
+          isActive: true,
+          createdByEmployeeId: membership.employeeId,
+        });
+      }
+    }
+  });
+
+  await audit(membership, "catalogue_template.apply", "catalogue_template", input.templateId, null, {
+    clientOrganisationId: org.id,
+    addedCategories,
+    addedSubcategories,
+    appliedCategoryIds: [...selected],
+  });
+  return { ok: true, organisationId: org.id };
+}
+
+/* ------------------------------------------------------------------ */
+/* User management (config admin)                                      */
+/* ------------------------------------------------------------------ */
+
+/** Deactivate/reactivate an employee and all of their memberships. */
+export async function setEmployeeActiveAction(
+  membership: WorkTrackMembership,
+  input: { employeeId: string; isActive: boolean }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  if (input.employeeId === membership.employeeId) {
+    return { ok: false, message: "You cannot deactivate your own account." };
+  }
+  const employee = (
+    await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1)
+  )[0];
+  if (!employee) return { ok: false, message: "Employee not found." };
+
+  await db
+    .update(employees)
+    .set({ isActive: input.isActive, updatedAt: new Date() })
+    .where(eq(employees.id, employee.id));
+  await db
+    .update(memberships)
+    .set({ isActive: input.isActive, updatedAt: new Date() })
+    .where(eq(memberships.employeeId, employee.id));
+  await audit(
+    membership,
+    input.isActive ? "member.reactivate" : "member.deactivate",
+    "employee",
+    employee.id,
+    { isActive: employee.isActive },
+    { isActive: input.isActive }
+  );
+  return { ok: true };
+}
+
+/**
+ * Permanently deletes an employee and their memberships — only when they have
+ * no work records. Employees with entries/tasks must be deactivated instead.
+ */
+export async function deleteEmployeeAction(
+  membership: WorkTrackMembership,
+  input: { employeeId: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  if (input.employeeId === membership.employeeId) {
+    return { ok: false, message: "You cannot delete your own account." };
+  }
+  const employee = (
+    await db.select().from(employees).where(eq(employees.id, input.employeeId)).limit(1)
+  )[0];
+  if (!employee) return { ok: false, message: "Employee not found." };
+
+  const [entryCount] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(timeEntries)
+    .where(eq(timeEntries.employeeId, employee.id));
+  const [taskCount] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(tasks)
+    .where(eq(tasks.employeeId, employee.id));
+  const [progressCount] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(taskProgressUpdates)
+    .where(eq(taskProgressUpdates.authorEmployeeId, employee.id));
+  const [catCount] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(clientCategories)
+    .where(eq(clientCategories.createdByEmployeeId, employee.id));
+  const [subCount] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(clientSubcategories)
+    .where(eq(clientSubcategories.createdByEmployeeId, employee.id));
+  if ((entryCount?.c ?? 0) + (taskCount?.c ?? 0) + (progressCount?.c ?? 0) + (catCount?.c ?? 0) + (subCount?.c ?? 0) > 0) {
+    return {
+      ok: false,
+      message: "This user has recorded work or catalogue contributions. Deactivate them instead to preserve history.",
+    };
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.delete(employeeTeams).where(eq(employeeTeams.employeeId, employee.id));
+    await tx.delete(memberships).where(eq(memberships.employeeId, employee.id));
+    await tx.delete(employees).where(eq(employees.id, employee.id));
+  });
+  await audit(membership, "member.delete", "employee", employee.id, { name: employee.fullName }, null);
+  return { ok: true };
 }

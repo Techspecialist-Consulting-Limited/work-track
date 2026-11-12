@@ -1043,6 +1043,47 @@ export function revokeEmployeeInvitation(invitationId: string): Promise<SyncResp
   return syncAction("revokeEmployeeInvitation", { invitationId });
 }
 
+/* ------------------------- catalogue templates ------------------------- */
+
+export function saveClientCatalogueAsTemplate(input: {
+  clientOrganisationId: string;
+  name: string;
+  description?: string;
+}): Promise<SyncResponse | null> {
+  return syncAction("saveClientCatalogueAsTemplate", { id: newId(), ...input });
+}
+
+export function saveCatalogueTemplate(input: {
+  templateId?: string;
+  name: string;
+  description?: string;
+  categories: { key?: string; name: string; subcategories: { key?: string; name: string }[] }[];
+}): Promise<SyncResponse | null> {
+  return syncAction("saveCatalogueTemplate", input);
+}
+
+export function deleteCatalogueTemplate(templateId: string): Promise<SyncResponse | null> {
+  return syncAction("deleteCatalogueTemplate", { templateId });
+}
+
+export function applyCatalogueTemplate(input: {
+  clientOrganisationId: string;
+  templateId: string;
+  categoryIds: string[];
+}): Promise<SyncResponse | null> {
+  return syncAction("applyCatalogueTemplate", input);
+}
+
+/* ------------------------------ user management ------------------------------ */
+
+export function setEmployeeActive(employeeId: string, isActive: boolean): Promise<SyncResponse | null> {
+  return syncAction("setEmployeeActive", { employeeId, isActive });
+}
+
+export function deleteEmployee(employeeId: string): Promise<SyncResponse | null> {
+  return syncAction("deleteEmployee", { employeeId });
+}
+
 export function updateOrganisation(input: {
   organisationId: string;
   name?: string;

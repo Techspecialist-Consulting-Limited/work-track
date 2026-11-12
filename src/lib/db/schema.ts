@@ -259,6 +259,66 @@ export const clientSubcategories = pgTable(
   ]
 );
 
+/* Catalogue template library — independent snapshots applied to client catalogues. */
+export const catalogueTemplates = pgTable(
+  "catalogue_templates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    description: text("description"),
+    createdByMembershipId: uuid("created_by_membership_id").references(() => memberships.id),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("catalogue_templates_name_key").on(
+      sql`regexp_replace(lower(btrim(${t.name})), '\s+', ' ', 'g')`
+    ),
+    check("catalogue_templates_name_not_blank", sql`length(btrim(name)) > 0`),
+  ]
+);
+
+export const catalogueTemplateCategories = pgTable(
+  "catalogue_template_categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => catalogueTemplates.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("catalogue_template_categories_name_key").on(
+      t.templateId,
+      sql`regexp_replace(lower(btrim(${t.name})), '\s+', ' ', 'g')`
+    ),
+    index("catalogue_template_categories_template_idx").on(t.templateId),
+    check("catalogue_template_categories_name_not_blank", sql`length(btrim(name)) > 0`),
+  ]
+);
+
+export const catalogueTemplateSubcategories = pgTable(
+  "catalogue_template_subcategories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    templateCategoryId: uuid("template_category_id")
+      .notNull()
+      .references(() => catalogueTemplateCategories.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("catalogue_template_subcategories_name_key").on(
+      t.templateCategoryId,
+      sql`regexp_replace(lower(btrim(${t.name})), '\s+', ' ', 'g')`
+    ),
+    index("catalogue_template_subcategories_category_idx").on(t.templateCategoryId),
+    check("catalogue_template_subcategories_name_not_blank", sql`length(btrim(name)) > 0`),
+  ]
+);
+
 export const taskCategories = pgTable(
   "task_categories",
   {
