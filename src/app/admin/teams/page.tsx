@@ -1,21 +1,21 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { connection } from "next/server";
-import { TeamsAdmin } from "@/components/admin/TeamsAdmin";
+import { AdminConfigTabs } from "@/components/admin/AdminConfigTabs";
 import { requireConfigAdminPage } from "@/lib/auth/authorize";
 
 export const metadata: Metadata = {
-  title: "Teams & Projects",
-  description: "Configure teams, staff assignments, and each team's project library.",
+  title: "Admin",
+  description: "Configure teams, staff assignments, project libraries and client-site reporting.",
 };
 
 async function AdminContent() {
   await connection();
   await requireConfigAdminPage();
-  return <TeamsAdmin />;
+  return <AdminConfigTabs />;
 }
 
-export default function TeamsAdminPage() {
+export default function AdminPage() {
   return (
     <Suspense
       fallback={

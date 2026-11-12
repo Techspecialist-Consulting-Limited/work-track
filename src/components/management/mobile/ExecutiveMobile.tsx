@@ -90,6 +90,7 @@ export function ExecutiveMobile() {
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [filter, setFilter] = useState<MobileFilter>("all");
+  const [orgFilter, setOrgFilter] = useState("all");
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [dateSheetOpen, setDateSheetOpen] = useState(false);
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
@@ -109,7 +110,7 @@ export function ExecutiveMobile() {
         return {
           employee,
           day,
-          tasksRecorded: new Set(day.entries.map((e) => e.taskId)).size,
+          tasksRecorded: new Set(day.entries.map((e) => e.taskId).filter((id): id is string => Boolean(id))).size,
           location: primaryLocation(day),
           onBreak: day.isToday && day.activeBreak !== null,
         };
@@ -117,8 +118,14 @@ export function ExecutiveMobile() {
     [db, activeKey, now]
   );
 
+  const orgKind = orgFilter !== "all"
+    ? db.organisations.find((org) => org.id === orgFilter)?.kind
+    : undefined;
   const visibleRows = rows.filter(({ employee, day, location, onBreak }) => {
     if (query && !`${employee.name} ${employee.role}`.toLowerCase().includes(query.trim().toLowerCase())) return false;
+    if (orgKind === "employer" && employee.employerOrganisationId !== orgFilter) return false;
+    if (orgKind === "client" && employee.clientOrganisationId !== orgFilter) return false;
+    if (orgFilter !== "all" && !orgKind) return false;
     switch (filter) {
       case "all": return true;
       case "logged": return day.entries.length > 0;
@@ -505,6 +512,24 @@ export function ExecutiveMobile() {
               }}
             />
           ))}
+        </div>
+        <div className="mt-4 border-t border-[#EEEAF2] pt-3">
+          <label className="mb-1.5 block text-[11px] font-semibold text-[#53506B]" htmlFor="mobile-org-filter">
+            Organisation
+          </label>
+          <select
+            id="mobile-org-filter"
+            value={orgFilter}
+            onChange={(e) => setOrgFilter(e.target.value)}
+            className="min-h-11 w-full rounded-xl border border-[#E2E2EE] bg-white px-3 text-base text-[#17172B] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/25"
+          >
+            <option value="all">All organisations</option>
+            {db.organisations.map((org) => (
+              <option key={org.id} value={org.id}>
+                {org.name} — {org.kind === "employer" ? "Employer" : "Client"}
+              </option>
+            ))}
+          </select>
         </div>
       </BottomSheet>
 

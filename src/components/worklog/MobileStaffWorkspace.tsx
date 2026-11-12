@@ -24,6 +24,7 @@ import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
+import { ClientSiteFields } from "./ClientSiteFields";
 import {
   MOBILE_BASE_INPUT_CLASS,
   MOBILE_INPUT_CLASS,
@@ -240,9 +241,9 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
             <section aria-labelledby="mobile-project-heading">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <h2 id="mobile-project-heading" className="text-sm font-semibold text-[#17172F]">
-                  What are you working on?
+                  {c.formIsClientSite ? "Client work" : "What are you working on?"}
                 </h2>
-                {c.teams.length > 1 ? (
+                {!c.formIsClientSite && (c.teams.length > 1 ? (
                   <span className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#E7E6F0] bg-white px-2 text-[11px] font-semibold text-[#53506B]">
                     <Users size={13} className="text-[#8B7BE8]" aria-hidden="true" />
                     {c.activeTeam?.name ?? "Team"}
@@ -252,10 +253,10 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                     <Users size={13} className="text-[#8B7BE8]" aria-hidden="true" />
                     {c.activeTeam.name}
                   </span>
-                ) : null}
+                ) : null)}
               </div>
 
-              {c.teams.length > 1 ? (
+              {!c.formIsClientSite && c.teams.length > 1 ? (
                 <div className="mb-2">
                   <WorkTrackSelect
                     label="Team"
@@ -272,6 +273,10 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                 </div>
               ) : null}
 
+              {c.formIsClientSite ? (
+                <ClientSiteFields c={c} inputClass={MOBILE_INPUT_CLASS} />
+              ) : (
+                <>
               <button
                 type="button"
                 onClick={() => {
@@ -391,12 +396,18 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                   </div>
                 ) : null}
               </div>
+                </>
+              )}
             </section>
 
             <section aria-labelledby="mobile-desc-heading">
               <label htmlFor="mobile-description" className="mb-1.5 block text-sm font-semibold text-[#17172F]">
                 What did you work on during this time?{" "}
-                <span className="text-[11px] font-normal text-[#9A97AD]">(optional)</span>
+                {c.formIsClientSite ? (
+                  <span className="text-[11px] font-normal text-[#B43A3A]">(required)</span>
+                ) : (
+                  <span className="text-[11px] font-normal text-[#9A97AD]">(optional)</span>
+                )}
               </label>
               <textarea
                 id="mobile-description"
@@ -690,23 +701,31 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               No matching projects. Add the missing one below.
             </p>
           ) : null}
+          {!c.showAddProject ? (
+            <button
+              type="button"
+              onClick={() => {
+                c.setNewProjectName(canAddSearchedProject ? projectSearchTrimmed : "");
+                c.setShowAddProject(true);
+                c.setProjectError(null);
+                c.setDuplicateProject(null);
+              }}
+              className="flex min-h-12 w-full items-center gap-3 rounded-xl border border-dashed border-[#B7E4C7] bg-[#EAF8F0]/70 px-3.5 text-left transition hover:bg-[#EAF8F0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+            >
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#EAF8F0] text-[#15803D]">
+                <Plus size={15} aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-[#15803D]">
+                  {canAddSearchedProject ? `Add “${projectSearchTrimmed}”` : "Add project / task"}
+                </span>
+                <span className="block truncate text-[11px] text-[#8B8B9A]">
+                  Not in the list — create it for your team
+                </span>
+              </span>
+            </button>
+          ) : null}
         </div>
-
-        {canAddSearchedProject && !c.showAddProject ? (
-          <button
-            type="button"
-            onClick={() => {
-              c.setNewProjectName(projectSearchTrimmed);
-              c.setShowAddProject(true);
-              c.setProjectError(null);
-              c.setDuplicateProject(null);
-            }}
-            className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#CFC8F3] bg-[#F5F1FF] text-sm font-semibold text-[#5A3ED0]"
-          >
-            <Plus size={15} aria-hidden="true" />
-            Add “{projectSearchTrimmed}” as a project
-          </button>
-        ) : null}
 
         {c.showAddProject ? (
           <div className="mt-3 rounded-xl border border-[#CFC8F3] bg-white p-3">
@@ -772,21 +791,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               {c.addingProject ? "Adding…" : "Add project"}
             </button>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              if (canAddSearchedProject) c.setNewProjectName(projectSearchTrimmed);
-              c.setShowAddProject(true);
-              c.setProjectError(null);
-              c.setDuplicateProject(null);
-            }}
-            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#CFC8F3] text-sm font-semibold text-[#5A3ED0]"
-          >
-            <Plus size={16} aria-hidden="true" />
-            Add missing project
-          </button>
-        )}
+        ) : null}
       </MobileSheet>
 
       <MobileSheet open={adjustSheetOpen} onClose={() => setAdjustSheetOpen(false)} title="Log overtime">

@@ -5,7 +5,11 @@ import {
   addProgressUpdateAction,
   addWorkEntryAction,
   archiveTeamProjectAction,
+  assignEmployeeClientAction,
   assignEmployeeTeamAction,
+  createClientCategoryAction,
+  createClientOrganisationAction,
+  createClientSubcategoryAction,
   createStaffProjectAction,
   createSubtaskAction,
   createTaskAction,
@@ -16,11 +20,17 @@ import {
   endBreakAction,
   inviteChairmanAction,
   promoteTeamProjectAction,
+  reviewClientSuggestionAction,
   selectTeamAction,
   setManagementReviewAction,
   snapshotFor,
   startBreakAction,
+  suggestClientCategoryAction,
+  suggestClientSubcategoryAction,
   updateBreakAction,
+  updateClientCategoryAction,
+  updateClientSubcategoryAction,
+  updateOrganisationAction,
   updateProfileAction,
   updateSubtaskAction,
   updateSubtaskStatusAction,
@@ -141,6 +151,36 @@ export async function POST(request: Request) {
         break;
       case "promoteTeamProject":
         result = await promoteTeamProjectAction(membership, p as never);
+        break;
+      case "createClientOrganisation":
+        result = await createClientOrganisationAction(membership, p as never);
+        break;
+      case "updateOrganisation":
+        result = await updateOrganisationAction(membership, p as never);
+        break;
+      case "assignEmployeeClient":
+        result = await assignEmployeeClientAction(membership, p as never);
+        break;
+      case "createClientCategory":
+        result = await createClientCategoryAction(membership, p as never);
+        break;
+      case "updateClientCategory":
+        result = await updateClientCategoryAction(membership, p as never);
+        break;
+      case "createClientSubcategory":
+        result = await createClientSubcategoryAction(membership, p as never);
+        break;
+      case "updateClientSubcategory":
+        result = await updateClientSubcategoryAction(membership, p as never);
+        break;
+      case "reviewClientSuggestion":
+        result = await reviewClientSuggestionAction(membership, p as never);
+        break;
+      case "suggestClientCategory":
+        result = await suggestClientCategoryAction(membership, p as never);
+        break;
+      case "suggestClientSubcategory":
+        result = await suggestClientSubcategoryAction(membership, p as never);
         break;
       default:
         return NextResponse.json({ ok: false, message: "Unknown action." }, { status: 400 });

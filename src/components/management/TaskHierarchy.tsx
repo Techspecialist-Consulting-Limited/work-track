@@ -128,6 +128,8 @@ export function buildEmployeeHierarchy(
   const day = getDaySummary(db, employeeId, dateKey);
   const entriesByTask = new Map<string, WorkEntry[]>();
   for (const entry of day.entries) {
+    // Client-site entries have no task; they are reported separately.
+    if (!entry.taskId) continue;
     const list = entriesByTask.get(entry.taskId) ?? [];
     list.push(entry);
     entriesByTask.set(entry.taskId, list);

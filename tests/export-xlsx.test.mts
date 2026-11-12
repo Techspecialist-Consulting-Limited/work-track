@@ -8,9 +8,12 @@ function database(): WorkLogDatabase {
   return {
     version: 2,
     employees: [
-      { id: "emp-1", name: "Alex Doe", role: "Developer", department: "Engineering" },
-      { id: "emp-2", name: "Sam Lee", role: "Analyst", department: "Finance" },
+      { id: "emp-1", name: "Alex Doe", role: "Developer", department: "Engineering", workArrangement: "in_house" },
+      { id: "emp-2", name: "Sam Lee", role: "Analyst", department: "Finance", workArrangement: "in_house" },
     ],
+    organisations: [],
+    clientCategories: [],
+    clientSubcategories: [],
     teams: [
       {
         id: "team-eng",
@@ -166,6 +169,10 @@ test("workbook is genuine OOXML that an Excel parser can read back", async () =>
   assert.deepEqual(headers, [
     "Date",
     "Employee",
+    "Employer",
+    "Client",
+    "Category",
+    "Subcategory",
     "Team",
     "Project",
     "Project description",
@@ -184,12 +191,12 @@ test("workbook is genuine OOXML that an Excel parser can read back", async () =>
   const rows = (log.getSheetValues() as unknown[][]).slice(2).filter(Boolean);
   const alexRow = rows.find((row) => row[2] === "Alex Doe") as unknown[];
   assert.ok(alexRow, "Alex's entry should be exported");
-  assert.equal(alexRow[3], "Engineering");
-  assert.equal(alexRow[4], "Platform Migration");
-  assert.equal(alexRow[5], "Move services to the new platform.");
-  assert.equal(alexRow[6], "Cut over database");
-  assert.equal(alexRow[7], "Migrated the staging database");
-  assert.equal(alexRow[12], 2);
+  assert.equal(alexRow[7], "Engineering");
+  assert.equal(alexRow[8], "Platform Migration");
+  assert.equal(alexRow[9], "Move services to the new platform.");
+  assert.equal(alexRow[10], "Cut over database");
+  assert.equal(alexRow[11], "Migrated the staging database");
+  assert.equal(alexRow[16], 2);
 });
 
 test("export respects the team filter on entries, breaks and summaries", async () => {

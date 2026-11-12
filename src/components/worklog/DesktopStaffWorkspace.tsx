@@ -21,6 +21,7 @@ import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
+import { ClientSiteFields } from "./ClientSiteFields";
 import { BASE_INPUT_CLASS, INPUT_CLASS, NEW_PROJECT_OPTION, SCHEDULED_MINUTES } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
@@ -62,9 +63,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     newProjectDescription,
     setNewProjectDescription,
     projectError,
-    setProjectError,
     duplicateProject,
-    setDuplicateProject,
     addingProject,
     addProject,
     useExistingProject,
@@ -155,15 +154,15 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
             : "Staff-added · pending review"
           : project.description,
     })),
-    ...(projectSearchTrimmed.length >= 2 && !projectSearchExact
-      ? [
-          {
-            value: NEW_PROJECT_OPTION,
-            label: `Add “${projectSearchTrimmed}” as a project`,
-            description: "Not in the list — create it for your team",
-          },
-        ]
-      : []),
+    {
+      value: NEW_PROJECT_OPTION,
+      label:
+        projectSearchTrimmed.length >= 2 && !projectSearchExact
+          ? `Add “${projectSearchTrimmed}” as a project`
+          : "Add a project / task…",
+      description: "Not in the list — create it for your team",
+      tone: "success" as const,
+    },
   ];
 
   const activityOptions = [
@@ -325,9 +324,9 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               <section aria-labelledby="task-heading" className="rounded-xl border border-[#E7E6F0] bg-[#FCFBFF] p-4">
                 <div className="flex items-center justify-between gap-2">
                   <h2 id="task-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
-                    Task Details
+                    {c.formIsClientSite ? "Client Work" : "Task Details"}
                   </h2>
-                  {teams.length > 1 ? (
+                  {!c.formIsClientSite && (teams.length > 1 ? (
                     <div className="w-[46%] max-w-[220px]">
                       <WorkTrackSelect
                         label="Team"
@@ -347,26 +346,33 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                       <Users size={13} className="text-[#8B7BE8]" aria-hidden="true" />
                       {activeTeam.name}
                     </span>
-                  ) : null}
+                  ) : null)}
                 </div>
 
                 <div className="mt-3 space-y-3">
+                  {c.formIsClientSite ? (
+                    <>
+                      <ClientSiteFields c={c} inputClass={INPUT_CLASS} />
+                      <label className="block text-xs font-semibold text-[#53506B]">
+                        What did you work on during this time?{" "}
+                        <span className="font-normal text-[#B43A3A]">(required)</span>
+                        <textarea
+                          value={description}
+                          onChange={(event) => setDescription(event.target.value)}
+                          rows={3}
+                          maxLength={WORKLOG_RULES.descriptionMaxLength}
+                          placeholder="Describe the client work you completed in this period…"
+                          className={`${INPUT_CLASS} min-h-[84px] resize-y`}
+                        />
+                        <span className="mt-1 block text-right text-[10px] font-normal text-[#9A97AD]">
+                          {descriptionCount}/{WORKLOG_RULES.descriptionMaxLength}
+                        </span>
+                      </label>
+                    </>
+                  ) : (
+                    <>
                   <div>
-                    <div className="flex items-end justify-between gap-2">
-                      <span className="text-xs font-semibold text-[#53506B]">Project / Main Task</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAddProject((value) => !value);
-                          setProjectError(null);
-                          setDuplicateProject(null);
-                        }}
-                        className="inline-flex min-h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold text-[#6C45F5] transition hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                      >
-                        <Plus size={12} aria-hidden="true" />
-                        Add missing project
-                      </button>
-                    </div>
+                    <span className="text-xs font-semibold text-[#53506B]">Project / Main Task</span>
                     <div className="mt-1 grid grid-cols-2 gap-2">
                       <input
                         value={projectSearch}
@@ -574,6 +580,8 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                       {descriptionCount}/{WORKLOG_RULES.descriptionMaxLength}
                     </span>
                   </label>
+                    </>
+                  )}
                 </div>
               </section>
 

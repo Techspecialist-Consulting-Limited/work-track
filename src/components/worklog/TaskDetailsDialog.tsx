@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Check,
   ChevronLeft,
+  ChevronRight,
   Eye,
   History,
   ListChecks,
@@ -29,7 +30,7 @@ import {
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import type { TaskStatus } from "@/lib/worklog/types";
 import { StatusBadge } from "./StatusBadge";
-import { STATUS_LABELS, STATUS_OPTIONS } from "./shared";
+import { dateKeyAfter, STATUS_LABELS, STATUS_OPTIONS } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
 const INPUT_CLASS =
@@ -56,7 +57,76 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
     c.closeTaskDetails();
   }
 
-  const tasks = c.employeeTasks;
+  function renderTaskCard(item: (typeof c.employeeTasks)[number], note?: string) {
+    const subtasks = getSubtasksForTask(c.db, item.id);
+    const summary = subtaskSummary(subtasks);
+    const selected = selectedId === item.id;
+    return (
+      <div
+        key={item.id}
+        className={`rounded-xl border bg-white p-3 transition ${
+          selected ? "border-[#6C45F5] bg-[#F5F1FF]" : "border-[#E7E6F0] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="min-w-0 break-words text-[13px] font-semibold text-[#17172F]">{item.title}</p>
+          <span className={`inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${TASK_STATUS_BADGE_CLASSES[item.currentStatus]}`}>
+            {TASK_STATUS_LABELS[item.currentStatus]}
+          </span>
+        </div>
+        {item.description ? (
+          <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-[#777A91]">{item.description}</p>
+        ) : null}
+        <p className="mt-1 text-[10px] text-[#777A91]">
+          {item.categoryName ? `${item.categoryName} · ` : ""}
+          {summary.label}
+        </p>
+        {note ? <p className="mt-1 text-[10px] font-semibold text-[#B45309]">{note}</p> : null}
+        {summary.total > 0 ? (
+          <div
+            role="progressbar"
+            aria-label={`${item.title} subtask completion`}
+            aria-valuemin={0}
+            aria-valuemax={summary.total}
+            aria-valuenow={summary.done + summary.dropped}
+            className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#ECEBF2]"
+          >
+            <div
+              className="h-full rounded-full bg-[#6C45F5] transition-[width]"
+              style={{ width: `${((summary.done + summary.dropped) / summary.total) * 100}%` }}
+            />
+          </div>
+        ) : null}
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => c.openUpdateProgress(item.id)}
+            className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg bg-[#6C45F5] px-2 text-[11px] font-semibold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+          >
+            <Pencil size={11} aria-hidden="true" />
+            Update Progress
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedId(item.id);
+              setError(null);
+            }}
+            aria-pressed={selected}
+            className={`inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
+              selected
+                ? "border-[#6C45F5] bg-white text-[#4E35C6]"
+                : "border-[#E7E6F0] bg-white text-[#4A4665] hover:border-[#CFC8F3] hover:bg-[#F5F1FF]"
+            }`}
+          >
+            <Eye size={11} aria-hidden="true" />
+            View Task
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const task = selectedId ? getTaskById(c.db, selectedId) : undefined;
 
   return (
@@ -108,80 +178,61 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
 
         <div className="grid min-h-0 flex-1 lg:grid-cols-[300px_minmax(0,1fr)]">
           <aside className={`min-h-0 overflow-y-auto border-[#EEEAF2] lg:block lg:border-r ${task ? "hidden" : "block"}`}>
+            <div className="flex items-center gap-1 border-b border-[#EEEAF2] px-2.5 py-2">
+              <button
+                type="button"
+                aria-label="Previous day"
+                onClick={() => c.setTasksDate(dateKeyAfter(c.tasksDateKey, -1))}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[#E7E6F0] text-[#53506B] hover:bg-[#F7F7FC]"
+              >
+                <ChevronLeft size={15} aria-hidden="true" />
+              </button>
+              <input
+                aria-label="Select tasks date"
+                type="date"
+                max={c.todayKey}
+                value={c.tasksDateKey}
+                onChange={(event) => c.setTasksDate(event.target.value)}
+                className="min-h-8 min-w-0 flex-1 rounded-lg border border-[#E7E6F0] px-1.5 text-xs font-semibold text-[#39364F]"
+              />
+              <button
+                type="button"
+                onClick={() => c.setTasksDate("")}
+                className="min-h-8 shrink-0 rounded-lg px-1.5 text-[11px] font-semibold text-[#6C45F5] hover:bg-[#F5F1FF]"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                aria-label="Next day"
+                disabled={c.tasksDateKey >= c.todayKey}
+                onClick={() => c.setTasksDate(dateKeyAfter(c.tasksDateKey, 1))}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[#E7E6F0] text-[#53506B] hover:bg-[#F7F7FC] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronRight size={15} aria-hidden="true" />
+              </button>
+            </div>
             <div className="space-y-1.5 p-3">
-              {tasks.length === 0 ? (
+              <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-[#9A97AD]">
+                {formatDateLabel(c.tasksDateKey)}
+                {c.tasksDateKey === c.todayKey ? " · Today" : ""}
+              </p>
+              {c.tasksForDay.length === 0 && c.carriedOverTasks.length === 0 ? (
                 <p className="rounded-xl bg-[#F7F7FC] px-3 py-6 text-center text-sm text-[#777A91]">
-                  No tasks yet. Create one while logging work.
+                  No tasks logged for this day.
                 </p>
               ) : null}
-              {tasks.map((item) => {
-                const subtasks = getSubtasksForTask(c.db, item.id);
-                const summary = subtaskSummary(subtasks);
-                const selected = selectedId === item.id;
-                return (
-                  <div
-                    key={item.id}
-                    className={`rounded-xl border bg-white p-3 transition ${
-                      selected ? "border-[#6C45F5] bg-[#F5F1FF]" : "border-[#E7E6F0] hover:border-[#CFC8F3] hover:bg-[#FCFBFF]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="min-w-0 break-words text-[13px] font-semibold text-[#17172F]">{item.title}</p>
-                      <span className={`inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${TASK_STATUS_BADGE_CLASSES[item.currentStatus]}`}>
-                        {TASK_STATUS_LABELS[item.currentStatus]}
-                      </span>
-                    </div>
-                    {item.description ? (
-                      <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-[#777A91]">{item.description}</p>
-                    ) : null}
-                    <p className="mt-1 text-[10px] text-[#777A91]">
-                      {item.categoryName ? `${item.categoryName} · ` : ""}
-                      {summary.label}
-                    </p>
-                    {summary.total > 0 ? (
-                      <div
-                        role="progressbar"
-                        aria-label={`${item.title} subtask completion`}
-                        aria-valuemin={0}
-                        aria-valuemax={summary.total}
-                        aria-valuenow={summary.done + summary.dropped}
-                        className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#ECEBF2]"
-                      >
-                        <div
-                          className="h-full rounded-full bg-[#6C45F5] transition-[width]"
-                          style={{ width: `${((summary.done + summary.dropped) / summary.total) * 100}%` }}
-                        />
-                      </div>
-                    ) : null}
-                    <div className="mt-2 grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => c.openUpdateProgress(item.id)}
-                        className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg bg-[#6C45F5] px-2 text-[11px] font-semibold text-white transition hover:bg-[#5935DE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                      >
-                        <Pencil size={11} aria-hidden="true" />
-                        Update Progress
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedId(item.id);
-                          setError(null);
-                        }}
-                        aria-pressed={selected}
-                        className={`inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] ${
-                          selected
-                            ? "border-[#6C45F5] bg-white text-[#4E35C6]"
-                            : "border-[#E7E6F0] bg-white text-[#4A4665] hover:border-[#CFC8F3] hover:bg-[#F5F1FF]"
-                        }`}
-                      >
-                        <Eye size={11} aria-hidden="true" />
-                        View Task
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {c.tasksForDay.map((item) => renderTaskCard(item))}
+              {c.carriedOverTasks.length ? (
+                <>
+                  <p className="mt-3 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#B45309]">
+                    Carried over · still ongoing
+                  </p>
+                  {c.carriedOverTasks.map(({ task: item, lastEntryKey }) =>
+                    renderTaskCard(item, `Last logged ${formatDateLabel(lastEntryKey)}`)
+                  )}
+                </>
+              ) : null}
             </div>
           </aside>
 

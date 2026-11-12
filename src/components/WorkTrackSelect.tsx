@@ -10,6 +10,7 @@ export interface WorkTrackSelectOption<T extends string> {
   description?: string;
   dotColor?: string;
   disabled?: boolean;
+  tone?: "success";
 }
 
 interface WorkTrackSelectProps<T extends string> {
@@ -277,11 +278,13 @@ export function WorkTrackSelect<T extends string>({
                       ? "bg-[#F0EDFF] font-medium text-[#4936AE]"
                       : active
                         ? "bg-[#F7F5FF] text-[#373A55]"
-                        : "text-[#535A76] hover:bg-[#F7F5FF]"
+                        : option.tone === "success"
+                          ? "bg-[#EAF8F0] font-semibold text-[#15803D] hover:bg-[#DFF3E8]"
+                          : "text-[#535A76] hover:bg-[#F7F5FF]"
                 }`}
               >
                 {option.dotColor ? <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: option.dotColor }} /> : null}
-                <span className="min-w-0 flex-1 break-words">{option.label}</span>
+                <span className={`min-w-0 flex-1 break-words ${option.tone === "success" ? "font-semibold text-[#15803D]" : ""}`}>{option.label}</span>
                 {selected ? <Check size={14} aria-hidden="true" className="shrink-0 text-[#7257FF]" /> : null}
               </div>
             );

@@ -1,10 +1,13 @@
 import "server-only";
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, or } from "drizzle-orm";
 import { db } from "./index";
 import {
+  clientCategories,
+  clientSubcategories,
   employees,
   employeeTeams,
   memberships,
+  organisations,
   subtaskStatusHistory,
   taskCategories,
   taskProgressUpdateRevisions,
@@ -18,8 +21,11 @@ import {
 } from "./schema";
 import type {
   BreakEntry,
+  ClientCategory,
+  ClientSubcategory,
   Employee,
   EmployeeTeam,
+  Organisation,
   ProgressUpdate,
   ProgressUpdateRevision,
   StatusHistoryEvent,
@@ -51,6 +57,9 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
   const empty: WorkLogDatabase = {
     version: 2,
     employees: [],
+    organisations: [],
+    clientCategories: [],
+    clientSubcategories: [],
     teams: [],
     employeeTeams: [],
     projects: [],
@@ -64,7 +73,7 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
   };
   if (employeeIds.length === 0) return empty;
 
-  const [categoryRows, membershipRows, taskRows, entryRows, teamRows, employeeTeamRows] =
+  const [categoryRows, membershipRows, taskRows, entryRows, teamRows, employeeTeamRows, organisationRows] =
     await Promise.all([
       db.select().from(taskCategories).where(eq(taskCategories.isActive, true)).orderBy(asc(taskCategories.name)),
       db
@@ -79,10 +88,95 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
         .orderBy(asc(timeEntries.startAt)),
       db.select().from(teams).orderBy(asc(teams.name)),
       db.select().from(employeeTeams).where(inArray(employeeTeams.employeeId, employeeIds)),
+      db.select().from(organisations).orderBy(asc(organisations.name)),
     ]);
 
   const employeeNames = new Map(employeeRows.map((row) => [row.id, row.fullName]));
   const categoryNames = new Map(categoryRows.map((row) => [row.id, row.name]));
+  const organisationNames = new Map(organisationRows.map((row) => [row.id, row.name]));
+
+  // Staff only see catalogue entries for their assigned client; management sees all clients.
+  const staffClientOrgId = scope.employeeId ? employeeRows[0]?.clientOrganisationId : undefined;
+  const visibleClientOrgIds = scope.employeeId
+    ? staffClientOrgId
+      ? [staffClientOrgId]
+      : []
+    : organisationRows.filter((row) => row.kind === "client").map((row) => row.id);
+
+  // Staff must not see other employees' pending/rejected suggestions, but rows
+  // their own entries already reference stay resolvable for history — including
+  // rows under a client they have since been reassigned away from.
+  const referencedCategoryIds = new Set(
+    entryRows.map((row) => row.clientCategoryId).filter((id): id is string => Boolean(id))
+  );
+  const referencedSubcategoryIds = new Set(
+    entryRows.map((row) => row.clientSubcategoryId).filter((id): id is string => Boolean(id))
+  );
+
+  let clientCategoryRows: (typeof clientCategories.$inferSelect)[] = [];
+  let clientSubcategoryRows: (typeof clientSubcategories.$inferSelect)[] = [];
+  if (scope.employeeId) {
+    const orgIds = staffClientOrgId ? [staffClientOrgId] : [];
+    const refSubIds = [...referencedSubcategoryIds];
+    clientSubcategoryRows =
+      orgIds.length || refSubIds.length
+        ? await db
+            .select()
+            .from(clientSubcategories)
+            .where(
+              or(
+                orgIds.length ? inArray(clientSubcategories.clientOrganisationId, orgIds) : undefined,
+                refSubIds.length ? inArray(clientSubcategories.id, refSubIds) : undefined
+              )
+            )
+            .orderBy(asc(clientSubcategories.name))
+        : [];
+    const catIds = new Set(referencedCategoryIds);
+    for (const row of clientSubcategoryRows) catIds.add(row.categoryId);
+    const idList = [...catIds];
+    clientCategoryRows =
+      orgIds.length || idList.length
+        ? await db
+            .select()
+            .from(clientCategories)
+            .where(
+              or(
+                orgIds.length ? inArray(clientCategories.clientOrganisationId, orgIds) : undefined,
+                idList.length ? inArray(clientCategories.id, idList) : undefined
+              )
+            )
+            .orderBy(asc(clientCategories.name))
+        : [];
+  } else if (visibleClientOrgIds.length) {
+    [clientCategoryRows, clientSubcategoryRows] = await Promise.all([
+      db
+        .select()
+        .from(clientCategories)
+        .where(inArray(clientCategories.clientOrganisationId, visibleClientOrgIds))
+        .orderBy(asc(clientCategories.name)),
+      db
+        .select()
+        .from(clientSubcategories)
+        .where(inArray(clientSubcategories.clientOrganisationId, visibleClientOrgIds))
+        .orderBy(asc(clientSubcategories.name)),
+    ]);
+  }
+  const visibleClientCategories = scope.employeeId
+    ? clientCategoryRows.filter(
+        (row) =>
+          row.approvalStatus === "approved" ||
+          row.createdByEmployeeId === scope.employeeId ||
+          referencedCategoryIds.has(row.id)
+      )
+    : clientCategoryRows;
+  const visibleClientSubcategories = scope.employeeId
+    ? clientSubcategoryRows.filter(
+        (row) =>
+          row.approvalStatus === "approved" ||
+          row.createdByEmployeeId === scope.employeeId ||
+          referencedSubcategoryIds.has(row.id)
+      )
+    : clientSubcategoryRows;
 
   // Staff only see the teams they belong to; management sees every team.
   const visibleTeamIds = scope.employeeId
@@ -167,12 +261,18 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
       });
       continue;
     }
-    if (!row.taskId || !row.workLocation || !row.endAt || row.durationMinutes == null) continue;
+    // Work entries are either in-house (task-linked) or client-site
+    // (category + subcategory pair); the DB check enforces the XOR.
+    const isInHouse = row.taskId != null;
+    const isClientSite = row.clientCategoryId != null && row.clientSubcategoryId != null;
+    if ((!isInHouse && !isClientSite) || !row.workLocation || !row.endAt || row.durationMinutes == null) continue;
     workEntries.push({
       id: row.id,
       employeeId: row.employeeId,
-      taskId: row.taskId,
+      taskId: row.taskId ?? undefined,
       subtaskId: row.subtaskId ?? undefined,
+      clientCategoryId: row.clientCategoryId ?? undefined,
+      clientSubcategoryId: row.clientSubcategoryId ?? undefined,
       description: row.description ?? "",
       startAt: row.startAt.toISOString(),
       endAt: row.endAt.toISOString(),
@@ -251,6 +351,60 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     role: e.jobTitle,
     department: e.department,
     avatarUrl: e.avatarUrl ?? undefined,
+    workArrangement: e.workArrangement as Employee["workArrangement"],
+    employerOrganisationId: e.employerOrganisationId ?? undefined,
+    employerOrganisationName: e.employerOrganisationId
+      ? organisationNames.get(e.employerOrganisationId)
+      : undefined,
+    clientOrganisationId: e.clientOrganisationId ?? undefined,
+    clientOrganisationName: e.clientOrganisationId
+      ? organisationNames.get(e.clientOrganisationId)
+      : undefined,
+  }));
+
+  const mappedOrganisations: Organisation[] = organisationRows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    kind: row.kind as Organisation["kind"],
+    description: row.description ?? undefined,
+    isActive: row.isActive,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }));
+
+  const mappedClientCategories: ClientCategory[] = visibleClientCategories.map((row) => ({
+    id: row.id,
+    clientOrganisationId: row.clientOrganisationId,
+    clientOrganisationName: organisationNames.get(row.clientOrganisationId),
+    name: row.name,
+    approvalStatus: row.approvalStatus as ClientCategory["approvalStatus"],
+    isActive: row.isActive,
+    createdByEmployeeId: row.createdByEmployeeId ?? undefined,
+    createdByName: row.createdByEmployeeId ? employeeNames.get(row.createdByEmployeeId) : undefined,
+    reviewedByName: row.reviewedByMembershipId ? membershipNames.get(row.reviewedByMembershipId) : undefined,
+    reviewedAt: toIso(row.reviewedAt),
+    reviewNote: row.reviewNote ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }));
+
+  const clientCategoryNames = new Map(visibleClientCategories.map((row) => [row.id, row.name]));
+  const mappedClientSubcategories: ClientSubcategory[] = visibleClientSubcategories.map((row) => ({
+    id: row.id,
+    clientOrganisationId: row.clientOrganisationId,
+    clientOrganisationName: organisationNames.get(row.clientOrganisationId),
+    categoryId: row.categoryId,
+    categoryName: clientCategoryNames.get(row.categoryId),
+    name: row.name,
+    approvalStatus: row.approvalStatus as ClientSubcategory["approvalStatus"],
+    isActive: row.isActive,
+    createdByEmployeeId: row.createdByEmployeeId ?? undefined,
+    createdByName: row.createdByEmployeeId ? employeeNames.get(row.createdByEmployeeId) : undefined,
+    reviewedByName: row.reviewedByMembershipId ? membershipNames.get(row.reviewedByMembershipId) : undefined,
+    reviewedAt: toIso(row.reviewedAt),
+    reviewNote: row.reviewNote ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   }));
 
   const mappedCategories: TaskCategory[] = categoryRows.map((row) => ({ id: row.id, name: row.name }));
@@ -326,6 +480,9 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
   return {
     version: 2,
     employees: mappedEmployees,
+    organisations: mappedOrganisations,
+    clientCategories: mappedClientCategories,
+    clientSubcategories: mappedClientSubcategories,
     teams: mappedTeams,
     employeeTeams: mappedEmployeeTeams,
     projects: mappedProjects,

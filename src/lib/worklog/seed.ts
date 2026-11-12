@@ -20,11 +20,11 @@ import { getZonedDateParts, zonedDateTimeToDate } from "@/lib/worktrack/schedule
 export const SIGNED_IN_EMPLOYEE_ID = "alex";
 
 export const SEED_EMPLOYEES: Employee[] = [
-  { id: "alex", name: "Alex Johnson", role: "Software Developer", department: "Engineering" },
-  { id: "sarah", name: "Sarah Adams", role: "Business Analyst", department: "Product" },
-  { id: "david", name: "David James", role: "DevOps Engineer", department: "Engineering" },
-  { id: "esther", name: "Esther Michael", role: "Product Designer", department: "Design" },
-  { id: "ibrahim", name: "Ibrahim Musa", role: "Customer Support Lead", department: "Support" },
+  { id: "alex", name: "Alex Johnson", role: "Software Developer", department: "Engineering", workArrangement: "in_house" },
+  { id: "sarah", name: "Sarah Adams", role: "Business Analyst", department: "Product", workArrangement: "in_house" },
+  { id: "david", name: "David James", role: "DevOps Engineer", department: "Engineering", workArrangement: "in_house" },
+  { id: "esther", name: "Esther Michael", role: "Product Designer", department: "Design", workArrangement: "in_house" },
+  { id: "ibrahim", name: "Ibrahim Musa", role: "Customer Support Lead", department: "Support", workArrangement: "in_house" },
 ];
 
 /** Default categories. Tasks may be uncategorised; the field is optional. */
@@ -473,6 +473,9 @@ export function buildSeedDatabase(): WorkLogDatabase {
   return {
     version: 2,
     employees: SEED_EMPLOYEES,
+    organisations: [],
+    clientCategories: [],
+    clientSubcategories: [],
     teams: SEED_TEAMS,
     employeeTeams: SEED_EMPLOYEE_TEAMS,
     projects,

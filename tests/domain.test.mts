@@ -49,7 +49,10 @@ function entry(id: string, taskId: string, startAt: string, endAt: string, norma
 function database(overrides: Partial<WorkLogDatabase> = {}): WorkLogDatabase {
   return {
     version: 2,
-    employees: [{ id: "emp-1", name: "Alex", role: "Developer", department: "Engineering" }],
+    employees: [{ id: "emp-1", name: "Alex", role: "Developer", department: "Engineering", workArrangement: "in_house" }],
+    organisations: [],
+    clientCategories: [],
+    clientSubcategories: [],
     teams: [],
     employeeTeams: [],
     projects: [],
