@@ -619,6 +619,10 @@ export const invitations = pgTable(
     clientOrganisationId: uuid("client_organisation_id").references(() => organisations.id),
     workArrangement: text("work_arrangement"),
     teamId: uuid("team_id").references(() => teams.id),
+    /** Email delivery state for the invitation link: sent | failed | skipped. */
+    emailStatus: text("email_status"),
+    emailAttemptedAt: timestamp("email_attempted_at", { withTimezone: true }),
+    emailLastError: text("email_last_error"),
     ...timestamps,
   },
   (t) => [

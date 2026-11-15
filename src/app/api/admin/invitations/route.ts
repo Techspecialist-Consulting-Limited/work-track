@@ -22,6 +22,9 @@ export type AdminInvitation = {
   teamName: string | null;
   /** Present only for pending token invitations so admins can copy the link. */
   link: string | null;
+  emailStatus: string | null;
+  emailAttemptedAt: string | null;
+  emailLastError: string | null;
 };
 
 export async function GET() {
@@ -65,6 +68,9 @@ export async function GET() {
       clientName: r.clientOrganisationId ? orgName.get(r.clientOrganisationId) ?? null : null,
       teamName: r.teamId ? teamName.get(r.teamId) ?? null : null,
       link,
+      emailStatus: r.emailStatus ?? null,
+      emailAttemptedAt: r.emailAttemptedAt?.toISOString() ?? null,
+      emailLastError: r.emailLastError ?? null,
     };
   });
   return NextResponse.json({ invitations: list });

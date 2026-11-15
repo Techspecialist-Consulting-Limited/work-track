@@ -26,7 +26,7 @@ import {
   timeEntries,
 } from "./schema";
 import { loadWorkLogDb } from "./worklog-data";
-import { getAuthorizedTeamIds, isEmployeeInTeam, type WorkTrackMembership } from "@/lib/auth/authorize";
+import { getAuthorizedTeamIds, getDefaultTeamId, isEmployeeInTeam, type WorkTrackMembership } from "@/lib/auth/authorize";
 import {
   resolveBreakEnd,
   validateBreakAllowance,
@@ -39,6 +39,8 @@ import {
   validateTaskTitle,
 } from "@/lib/worklog/validation";
 import { checkParentCanBeDone, checkSubtaskStatusChange, isTaskStatus } from "@/lib/worklog/status-rules";
+import { validateOnboardingInput, validateProfileField } from "@/lib/worklog/onboarding";
+import { deliverInvitationEmail } from "@/lib/email/deliver";
 import {
   canReviewSuggestion,
   findCatalogueDuplicate,
@@ -85,6 +87,9 @@ export type ActionResult =
       /** Categories/subcategories created by a template application. */
       addedCategories?: number;
       addedSubcategories?: number;
+      /** Invitation email delivery outcome (sent | failed | skipped). */
+      emailStatus?: string;
+      emailError?: string;
     }
   | {
       ok: false;
@@ -2237,7 +2242,16 @@ export async function createEmployeeInvitationAction(
     workArrangement: input.workArrangement,
     clientOrganisationId: values.clientOrganisationId,
   });
-  return { ok: true, inviteId: input.id, inviteToken: token };
+  // Email delivery happens AFTER the invitation commit — Graph latency must
+  // never hold the DB transaction open, and a send failure never loses the invite.
+  const delivery = await deliverInvitationEmail(input.id);
+  return {
+    ok: true,
+    inviteId: input.id,
+    inviteToken: token,
+    emailStatus: delivery.status,
+    ...(delivery.detail && delivery.status === "failed" ? { emailError: delivery.detail } : {}),
+  };
 }
 
 /** Regenerates the token and expiry for a pending invitation (resend). */
@@ -2263,7 +2277,41 @@ export async function resendEmployeeInvitationAction(
     })
     .where(eq(invitations.id, invite.id));
   await audit(membership, "member.invite_resend", "invitation", invite.id, null, { email: invite.email });
-  return { ok: true, inviteId: invite.id, inviteToken: token };
+  const delivery = await deliverInvitationEmail(invite.id);
+  return {
+    ok: true,
+    inviteId: invite.id,
+    inviteToken: token,
+    emailStatus: delivery.status,
+    ...(delivery.detail && delivery.status === "failed" ? { emailError: delivery.detail } : {}),
+  };
+}
+
+/**
+ * Retries email delivery for a pending invitation WITHOUT regenerating the
+ * token — reuses the stored encrypted token so the link stays identical.
+ */
+export async function retryInvitationEmailAction(
+  membership: WorkTrackMembership,
+  input: { invitationId: string }
+): Promise<ActionResult> {
+  const denied = configAdminOnly(membership);
+  if (denied) return denied;
+  const invite = await employeeInvitationRow(input.invitationId);
+  if (!invite) return { ok: false, message: "Invitation not found." };
+  if (invitationStatus(invite) !== "pending") {
+    return { ok: false, message: "Only pending invitations can be emailed." };
+  }
+  const delivery = await deliverInvitationEmail(invite.id);
+  await audit(membership, "member.invite_email_retry", "invitation", invite.id, null, {
+    email: invite.email,
+    emailStatus: delivery.status,
+  });
+  return {
+    ok: true,
+    emailStatus: delivery.status,
+    ...(delivery.detail && delivery.status === "failed" ? { emailError: delivery.detail } : {}),
+  };
 }
 
 export async function revokeEmployeeInvitationAction(
@@ -2786,6 +2834,174 @@ export async function setEmployeeActiveAction(
  * Permanently deletes an employee and their memberships — only when they have
  * no work records. Employees with entries/tasks must be deactivated instead.
  */
+/**
+ * Self-service staff registration. Called only after the onboarding form is
+ * completed — nothing is provisioned at Microsoft sign-in time. Identity
+ * comes from the verified Auth.js session (tid/oid); the client never
+ * supplies employee ids, orgs it isn't allowed, or roles.
+ *
+ * Idempotent: if a staff membership already exists for this identity the
+ * call succeeds without creating duplicates (safe resume after abandonment).
+ * A transaction-scoped advisory lock serializes concurrent submissions for
+ * the same identity so two tabs cannot create duplicate employees.
+ */
+export async function completeStaffOnboarding(
+  identity: { oid?: string; tid?: string; name?: string | null },
+  input: {
+    workArrangement?: string;
+    clientOrganisationId?: string | null;
+    jobTitle?: string;
+    department?: string;
+  }
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!identity.oid || !identity.tid) {
+    return { ok: false, message: "Your Microsoft account could not be verified." };
+  }
+  const oid = identity.oid;
+  const tid = identity.tid;
+
+  // Client-site orgs must be active orgs of kind 'client' — fetched fresh so
+  // deactivated/non-client orgs are rejected server-side.
+  const clientOrgs = await db
+    .select({
+      id: organisations.id,
+      name: organisations.name,
+      kind: organisations.kind,
+      isActive: organisations.isActive,
+    })
+    .from(organisations)
+    .where(eq(organisations.kind, "client"));
+  const checked = validateOnboardingInput(input, clientOrgs);
+  if (!checked.ok) return checked;
+
+  const jobTitle = validateProfileField(input.jobTitle, 80) || "Team Member";
+  const department = validateProfileField(input.department, 80);
+
+  try {
+    return await db.transaction(async (tx) => {
+      // Serializes concurrent registrations for the same Entra identity.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`${tid}:${oid}`}))`
+      );
+
+      // Resume-safe / no duplicate roles: any existing ACTIVE membership for
+      // this identity means onboarding is already complete (any role).
+      const existing = await tx
+        .select({ id: memberships.id })
+        .from(memberships)
+        .where(
+          and(
+            eq(memberships.microsoftTenantId, tid),
+            eq(memberships.microsoftObjectId, oid),
+            eq(memberships.isActive, true)
+          )
+        )
+        .limit(1);
+      if (existing.length > 0) return { ok: true as const };
+
+      // A deactivated employee profile must be reactivated by an admin —
+      // self-service must not resurrect it.
+      const employeeCode = `emp-${oid.slice(0, 8)}`;
+      const existingEmployee = (
+        await tx.select().from(employees).where(eq(employees.employeeCode, employeeCode)).limit(1)
+      )[0];
+      if (existingEmployee && !existingEmployee.isActive) {
+        return {
+          ok: false as const,
+          message: "Your account was deactivated. Ask an administrator to reactivate it.",
+        };
+      }
+
+      // In-house employer: assign automatically only when exactly one active
+      // employer organisation exists (current single-employer deployment).
+      let employerOrganisationId: string | null = null;
+      if (checked.workArrangement === "in_house") {
+        const employers = await tx
+          .select({ id: organisations.id })
+          .from(organisations)
+          .where(and(eq(organisations.kind, "employer"), eq(organisations.isActive, true)));
+        if (employers.length === 1) employerOrganisationId = employers[0].id;
+      }
+
+      const fullName =
+        identity.name?.trim() ||
+        `Team Member ${oid.slice(0, 8).toUpperCase()}`;
+
+      let employeeId = existingEmployee?.id ?? null;
+      if (employeeId) {
+        await tx
+          .update(employees)
+          .set({
+            fullName,
+            jobTitle,
+            department,
+            employerOrganisationId,
+            workArrangement: checked.workArrangement,
+            clientOrganisationId: checked.clientOrganisationId,
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(employees.id, employeeId));
+      } else {
+        employeeId = (
+          await tx
+            .insert(employees)
+            .values({
+              employeeCode,
+              fullName,
+              jobTitle,
+              department,
+              employerOrganisationId,
+              workArrangement: checked.workArrangement,
+              clientOrganisationId: checked.clientOrganisationId,
+            })
+            .returning({ id: employees.id })
+        )[0]?.id ?? null;
+      }
+      if (!employeeId) return { ok: false as const, message: "Your employee profile could not be created." };
+
+      // In-house staff land in the default team — same rule as before.
+      const defaultTeamId = checked.workArrangement === "in_house" ? await getDefaultTeamId() : null;
+      if (defaultTeamId) {
+        await tx
+          .insert(employeeTeams)
+          .values({ employeeId, teamId: defaultTeamId })
+          .onConflictDoNothing();
+      }
+
+      await tx
+        .insert(memberships)
+        .values({
+          role: "staff",
+          microsoftTenantId: tid,
+          microsoftObjectId: oid,
+          employeeId,
+          isActive: true,
+          activeTeamId: defaultTeamId,
+        })
+        .onConflictDoNothing();
+
+      await tx.insert(auditEvents).values({
+        action: "member.self_register",
+        entityType: "employee",
+        entityId: employeeId,
+        newValues: {
+          workArrangement: checked.workArrangement,
+          clientOrganisationId: checked.clientOrganisationId,
+          employerOrganisationId,
+        },
+      });
+      return { ok: true as const };
+    });
+  } catch (e) {
+    // Concurrent submission lost the unique-index race — treat as success.
+    if (typeof e === "object" && e !== null && (e as { code?: string }).code === "23505") {
+      return { ok: true };
+    }
+    throw e;
+  }
+}
+
 export async function deleteEmployeeAction(
   membership: WorkTrackMembership,
   input: { employeeId: string }
@@ -2812,26 +3028,56 @@ export async function deleteEmployeeAction(
     .select({ c: sql<number>`count(*)::int` })
     .from(taskProgressUpdates)
     .where(eq(taskProgressUpdates.authorEmployeeId, employee.id));
-  const [catCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(clientCategories)
-    .where(eq(clientCategories.createdByEmployeeId, employee.id));
-  const [subCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(clientSubcategories)
-    .where(eq(clientSubcategories.createdByEmployeeId, employee.id));
-  if ((entryCount?.c ?? 0) + (taskCount?.c ?? 0) + (progressCount?.c ?? 0) + (catCount?.c ?? 0) + (subCount?.c ?? 0) > 0) {
-    return {
-      ok: false,
-      message: "This user has recorded work or catalogue contributions. Deactivate them instead to preserve history.",
-    };
+  const hasHistory =
+    (entryCount?.c ?? 0) + (taskCount?.c ?? 0) + (progressCount?.c ?? 0) > 0;
+
+  if (!hasHistory) {
+    // Zero work history: try a full removal. Any stray FK reference
+    // (audit events, catalogue contributions) falls back to anonymise.
+    try {
+      await db.transaction(async (tx) => {
+        await tx.delete(employeeTeams).where(eq(employeeTeams.employeeId, employee.id));
+        await tx.delete(memberships).where(eq(memberships.employeeId, employee.id));
+        await tx.delete(employees).where(eq(employees.id, employee.id));
+      });
+      await audit(membership, "member.delete", "employee", employee.id, { name: employee.fullName }, null);
+      return { ok: true };
+    } catch {
+      // Fall through to the anonymising path below.
+    }
   }
 
+  // Permanent deletion with preserved history: the employee row stays as an
+  // anonymised anchor so entries/tasks/reports keep resolving, while the
+  // Entra identity link is destroyed so the same tid/oid can register anew.
   await db.transaction(async (tx) => {
     await tx.delete(employeeTeams).where(eq(employeeTeams.employeeId, employee.id));
-    await tx.delete(memberships).where(eq(memberships.employeeId, employee.id));
-    await tx.delete(employees).where(eq(employees.id, employee.id));
+    await tx
+      .update(memberships)
+      .set({
+        isActive: false,
+        microsoftTenantId: "deleted",
+        microsoftObjectId: sql`${memberships.id}::text`,
+        activeTeamId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(memberships.employeeId, employee.id));
+    await tx
+      .update(employees)
+      .set({
+        isActive: false,
+        fullName: "Deleted employee",
+        employeeCode: `deleted-${employee.id}`,
+        jobTitle: "",
+        department: "",
+        avatarUrl: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(employees.id, employee.id));
   });
-  await audit(membership, "member.delete", "employee", employee.id, { name: employee.fullName }, null);
+  await audit(membership, "member.delete", "employee", employee.id, { name: employee.fullName }, {
+    anonymised: true,
+    identityRemoved: true,
+  });
   return { ok: true };
 }

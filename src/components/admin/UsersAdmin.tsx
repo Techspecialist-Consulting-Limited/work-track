@@ -144,10 +144,16 @@ export function UsersAdmin() {
                     )}
                     <button
                       type="button"
-                      disabled={busyId === user.employeeId || isSelf || user.hasWorkRecords}
-                      title={user.hasWorkRecords ? "Has recorded work — deactivate instead" : "Permanently delete"}
+                      disabled={busyId === user.employeeId || isSelf}
+                      title="Permanently remove this account — history is preserved but anonymised"
                       onClick={() => {
-                        if (window.confirm(`Permanently delete ${user.fullName}? This cannot be undone.`)) {
+                        if (window.confirm(
+                          `Permanently delete ${user.fullName}${user.employeeCode ? ` (${user.employeeCode})` : ""}?\n\nRoles: ${user.memberships.map((m) => m.role).join(", ") || "none"} · ${user.workArrangement === "client_site" ? `Client-site → ${user.clientName ?? "unknown"}` : "In-house"}\n\nTheir sign-in identity and profile will be removed so they could register again as a new employee. ` +
+                          (user.hasWorkRecords
+                            ? "Recorded work history is preserved but anonymised as \"Deleted employee\"."
+                            : "They have no recorded work, so the profile will be fully removed.") +
+                          "\n\nThis cannot be undone."
+                        )) {
                           setBusyId(user.employeeId);
                           void act(deleteEmployee(user.employeeId), `${user.fullName} deleted.`).finally(() => setBusyId(null));
                         }

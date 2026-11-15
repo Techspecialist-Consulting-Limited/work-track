@@ -1,11 +1,13 @@
 import "server-only";
 import { redirect } from "next/navigation";
-import { eq, and, or, isNull } from "drizzle-orm";
+import { eq, and, or, isNull, sql } from "drizzle-orm";
 import { auth } from "./auth";
+import { bearerTokenFrom, EntraTokenError, verifyWorkTrackBearerToken } from "./entra-token";
+import { selectMembershipRole, type WorkTrackRole } from "./identity";
 import { db } from "@/lib/db";
 import { employees, employeeTeams, invitations, memberships, teams } from "@/lib/db/schema";
 
-export type WorkTrackRole = "staff" | "hr" | "chairman";
+export type { WorkTrackRole } from "./identity";
 export type ManagementRole = "hr" | "chairman";
 
 export interface WorkTrackMembership {
@@ -26,18 +28,28 @@ export interface WorkTrackMembership {
   user: { id: string; name?: string | null; email?: string | null };
 }
 
-/** Resolve the signed-in identity to an active WorkTrack membership, or null. */
-export async function getMembership(): Promise<WorkTrackMembership | null> {
-  const session = await auth();
-  const user = session?.user;
-  if (!user) return null;
+/**
+ * Core membership resolution shared by cookie sessions and bearer tokens.
+ * `requestedRole` is a hint validated against the identity's actual active
+ * memberships — never trusted on its own.
+ */
+type MembershipRow = {
+  membershipId: string;
+  role: WorkTrackRole;
+  employeeId: string | null;
+  isConfigAdmin: boolean;
+  activeTeamId: string | null;
+  employee: {
+    id: string;
+    fullName: string;
+    jobTitle: string;
+    department: string;
+    avatarUrl: string | null;
+  } | null;
+};
 
-  const tid = (user as { tid?: string }).tid;
-  const oid = (user as { oid?: string }).oid;
-  const sessionRole = (user as { role?: string }).role as WorkTrackRole | undefined;
-  if (!tid || !oid) return null;
-
-  const rows = await db
+async function fetchMembershipRows(tid: string, oid: string): Promise<MembershipRow[]> {
+  return db
     .select({
       membershipId: memberships.id,
       role: memberships.role,
@@ -58,17 +70,27 @@ export async function getMembership(): Promise<WorkTrackMembership | null> {
       and(
         eq(memberships.microsoftTenantId, tid),
         eq(memberships.microsoftObjectId, oid),
-        sessionRole ? eq(memberships.role, sessionRole) : undefined,
         eq(memberships.isActive, true),
         or(isNull(employees.id), eq(employees.isActive, true))
       )
-    )
-    .limit(1);
+    );
+}
 
-  const row = rows[0];
-  if (!row) return null;
-  if (row.employeeId && !row.employee) return null;
+function pickMembership(
+  rows: MembershipRow[],
+  requestedRole: string | null | undefined
+): MembershipRow | null {
+  const selection = selectMembershipRole(rows, requestedRole);
+  if (!selection.ok) return null;
+  const row = rows.find((r) => r.role === selection.role);
+  if (!row || (row.employeeId && !row.employee)) return null;
+  return row;
+}
 
+function toMembership(
+  row: MembershipRow,
+  user: { id?: string; name?: string | null; email?: string | null }
+): WorkTrackMembership {
   return {
     membershipId: row.membershipId,
     role: row.role,
@@ -78,6 +100,132 @@ export async function getMembership(): Promise<WorkTrackMembership | null> {
     employee: row.employeeId ? row.employee : null,
     user: { id: user.id ?? "", name: user.name, email: user.email },
   };
+}
+
+async function resolveMembership(identity: {
+  tid: string;
+  oid: string;
+  requestedRole?: string | null;
+  user: { id?: string; name?: string | null; email?: string | null };
+}): Promise<WorkTrackMembership | null> {
+  const rows = await fetchMembershipRows(identity.tid, identity.oid);
+  const row = pickMembership(rows, identity.requestedRole);
+  return row ? toMembership(row, identity.user) : null;
+}
+
+/** Resolve the signed-in identity to an active WorkTrack membership, or null. */
+export async function getMembership(): Promise<WorkTrackMembership | null> {
+  const session = await auth();
+  const user = session?.user;
+  if (!user) return null;
+
+  const tid = (user as { tid?: string }).tid;
+  const oid = (user as { oid?: string }).oid;
+  const sessionRole = (user as { role?: string }).role;
+  if (!tid || !oid) return null;
+
+  return resolveMembership({
+    tid,
+    oid,
+    requestedRole: sessionRole,
+    user: { id: user.id ?? "", name: user.name, email: user.email },
+  });
+}
+
+/**
+ * Lists every active membership an authenticated Entra identity holds —
+ * used by the mobile session-discovery endpoint so the client can present
+ * role selection. Each entry is server-verified; nothing is client-supplied.
+ */
+export async function listMembershipsForIdentity(identity: {
+  tid: string;
+  oid: string;
+}): Promise<
+  {
+    role: WorkTrackRole;
+    isConfigAdmin: boolean;
+    employeeId: string | null;
+    activeTeamId: string | null;
+    employeeName: string | null;
+  }[]
+> {
+  const rows = await fetchMembershipRows(identity.tid, identity.oid);
+  return rows.map((row) => ({
+    role: row.role,
+    isConfigAdmin: row.isConfigAdmin,
+    employeeId: row.employeeId,
+    activeTeamId: row.activeTeamId,
+    employeeName: row.employee?.fullName ?? null,
+  }));
+}
+
+/**
+ * Resolves a membership for an already-authenticated Entra identity
+ * (used by mobile flows such as invitation redemption where the caller
+ * verified the bearer token themselves).
+ */
+export async function getMembershipForIdentity(identity: {
+  tid: string;
+  oid: string;
+  role?: string | null;
+  name?: string | null;
+  email?: string | null;
+}): Promise<WorkTrackMembership | null> {
+  return resolveMembership({
+    tid: identity.tid,
+    oid: identity.oid,
+    requestedRole: identity.role,
+    user: { name: identity.name, email: identity.email },
+  });
+}
+
+/** Header carrying the role a multi-membership mobile user is acting as. */
+export const MOBILE_ROLE_HEADER = "x-worktrack-role";
+
+/**
+ * Request-aware membership resolution for API routes.
+ *
+ * - `Authorization: Bearer <Entra access token>` → verified JWT → identity
+ *   resolved against WorkTrack memberships. The role comes from the
+ *   `x-worktrack-role` header and is validated against the identity's real
+ *   memberships; single-membership identities resolve without it.
+ * - No bearer header → falls back to the Auth.js cookie session (web).
+ *
+ * Returns null when unauthenticated; throws AuthzError(401) when the token
+ * is invalid or the requested role is not held by the identity.
+ */
+export async function getRequestMembership(request: Request): Promise<WorkTrackMembership | null> {
+  const token = bearerTokenFrom(request);
+  if (!token) return getMembership();
+
+  let identity;
+  try {
+    identity = await verifyWorkTrackBearerToken(token);
+  } catch (e) {
+    if (e instanceof EntraTokenError) {
+      throw new AuthzError(401, "Invalid or expired access token.");
+    }
+    throw e;
+  }
+
+  const requestedRole = request.headers.get(MOBILE_ROLE_HEADER);
+  const rows = await fetchMembershipRows(identity.tid, identity.oid);
+  const selection = selectMembershipRole(rows, requestedRole);
+  // Token is valid but the identity/role is not authorized — 403, not 401,
+  // so clients don't treat it as a token-expiry problem.
+  if (!selection.ok) {
+    if (selection.reason === "role_required") {
+      throw new AuthzError(
+        403,
+        "Multiple WorkTrack roles found — send the x-worktrack-role header."
+      );
+    }
+    throw new AuthzError(403, "No active WorkTrack membership for this account.");
+  }
+
+  const row = pickMembership(rows, selection.role);
+  if (!row) throw new AuthzError(403, "No active WorkTrack membership for this account.");
+  return toMembership(row, { name: identity.name, email: identity.email });
 }
 
 export class AuthzError extends Error {
@@ -230,6 +378,46 @@ export async function autoProvisionMembership(
   }
 
   return getMembership();
+}
+
+/**
+ * Classifies an Entra identity's WorkTrack access state regardless of
+ * active flags — used during sign-in to distinguish "never registered"
+ * from "deactivated" (which must be reactivated by an admin, not self-service).
+ */
+export async function identityAccessState(identity: {
+  oid?: string;
+  tid?: string;
+}): Promise<"active" | "deactivated" | "none"> {
+  if (!identity.oid || !identity.tid) return "none";
+  const rows = await db
+    .select({
+      isActive: memberships.isActive,
+      employeeActive: employees.isActive,
+      hasEmployee: sql<boolean>`${memberships.employeeId} is not null`,
+    })
+    .from(memberships)
+    .leftJoin(employees, eq(memberships.employeeId, employees.id))
+    .where(
+      and(
+        eq(memberships.microsoftTenantId, identity.tid),
+        eq(memberships.microsoftObjectId, identity.oid)
+      )
+    );
+  if (rows.length === 0) {
+    // Employee profile may exist without any membership row (edge case).
+    const orphan = await db
+      .select({ isActive: employees.isActive })
+      .from(employees)
+      .where(eq(employees.employeeCode, `emp-${identity.oid.slice(0, 8)}`))
+      .limit(1);
+    if (orphan.length > 0) return orphan[0].isActive ? "none" : "deactivated";
+    return "none";
+  }
+  const anyUsable = rows.some(
+    (r) => r.isActive && (!r.hasEmployee || r.employeeActive !== false)
+  );
+  return anyUsable ? "active" : "deactivated";
 }
 
 /** True if the user already holds ANY active membership (any role). */

@@ -1043,6 +1043,10 @@ export function revokeEmployeeInvitation(invitationId: string): Promise<SyncResp
   return syncAction("revokeEmployeeInvitation", { invitationId });
 }
 
+export function retryInvitationEmail(invitationId: string): Promise<SyncResponse | null> {
+  return syncAction("retryInvitationEmail", { invitationId });
+}
+
 /* ------------------------- catalogue templates ------------------------- */
 
 export function saveClientCatalogueAsTemplate(input: {

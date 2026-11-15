@@ -1,12 +1,12 @@
 import { connection } from "next/server";
 import { NextResponse } from "next/server";
-import { AuthzError, getMembership } from "@/lib/auth/authorize";
+import { AuthzError, getRequestMembership } from "@/lib/auth/authorize";
 import { loadWorkLogDb } from "@/lib/db/worklog-data";
 
 export async function GET(request: Request) {
   await connection();
   try {
-    const membership = await getMembership();
+    const membership = await getRequestMembership(request);
     if (!membership) throw new AuthzError(401, "Authentication required.");
 
     const scope = new URL(request.url).searchParams.get("scope");
