@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { NextResponse } from "next/server";
-import { AuthzError, getMembership } from "@/lib/auth/authorize";
+import { AuthzError, getRequestMembership } from "@/lib/auth/authorize";
 import {
   addProgressUpdateAction,
   addWorkEntryAction,
@@ -13,6 +13,7 @@ import {
   createEmployerOrganisationAction,
   resendEmployeeInvitationAction,
   revokeEmployeeInvitationAction,
+  retryInvitationEmailAction,
   applyCatalogueTemplateAction,
   createClientSubcategoryAction,
   deleteEmployeeAction,
@@ -57,7 +58,7 @@ type Body = { action?: string; payload?: Record<string, unknown>; scope?: string
 export async function POST(request: Request) {
   await connection();
   try {
-    const membership = await getMembership();
+    const membership = await getRequestMembership(request);
     if (!membership) throw new AuthzError(401, "Authentication required.");
 
     const body = (await request.json()) as Body;
@@ -176,6 +177,9 @@ export async function POST(request: Request) {
         break;
       case "revokeEmployeeInvitation":
         result = await revokeEmployeeInvitationAction(membership, p as never);
+        break;
+      case "retryInvitationEmail":
+        result = await retryInvitationEmailAction(membership, p as never);
         break;
       case "saveClientCatalogueAsTemplate":
         result = await saveClientCatalogueAsTemplateAction(membership, p as never);

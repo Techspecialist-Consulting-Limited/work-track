@@ -49,7 +49,11 @@ export async function GET() {
     membersByEmp.set(m.employeeId, list);
   }
 
-  const empIds = empRows.map((e) => e.id);
+  // Permanently deleted employees are anonymised history anchors
+  // (employee_code "deleted-*") — hidden here. Deactivated users stay listed.
+  const visibleEmployees = empRows.filter((e) => !e.employeeCode?.startsWith("deleted-"));
+
+  const empIds = visibleEmployees.map((e) => e.id);
   const [entryCounts, taskCounts, progressCounts] = empIds.length
     ? await Promise.all([
         db.select({ employeeId: timeEntries.employeeId, c: sql<number>`count(*)::int` }).from(timeEntries).groupBy(timeEntries.employeeId),
@@ -65,7 +69,7 @@ export async function GET() {
     }
   }
 
-  const list: AdminUser[] = empRows.map((e) => ({
+  const list: AdminUser[] = visibleEmployees.map((e) => ({
     employeeId: e.id,
     employeeCode: e.employeeCode,
     fullName: e.fullName,

@@ -8,6 +8,7 @@ import {
   autoProvisionMembership,
   getMembership,
   hasAnyMembership,
+  identityAccessState,
   INVITE_TOKEN_COOKIE,
   LOGIN_ROLE_COOKIE,
   redeemInvitation,
@@ -61,11 +62,28 @@ async function CompleteContent({
     );
   }
 
-  // First login only: staff/HR self-provision (Entra sign-in = company
-  // account). Existing members never gain extra roles this way, and
-  // chairman remains manual-only.
+  // First login only: HR self-provisions; Staff goes through self-service
+  // onboarding (/onboarding) so work arrangement and client are chosen
+  // before any employee/membership record exists. Chairman remains
+  // invitation-only. Existing members never gain extra roles this way.
   let membership = await getMembership();
-  if (!membership && requested && requested !== "chairman") {
+  if (!membership && requested === "staff") {
+    const identity = {
+      oid: (session.user as { oid?: string }).oid,
+      tid: (session.user as { tid?: string }).tid,
+    };
+    const access = await identityAccessState(identity);
+    if (access === "deactivated") {
+      return (
+        <AuthMessage
+          title="Account deactivated"
+          body="Your WorkTrack account was deactivated. Ask an administrator to reactivate it before signing in again."
+        />
+      );
+    }
+    if (access === "none") redirect("/onboarding");
+    // 'active' but not as staff → fall through to the role-mismatch message.
+  } else if (!membership && requested && requested !== "chairman") {
     const identity = {
       oid: (session.user as { oid?: string }).oid,
       tid: (session.user as { tid?: string }).tid,

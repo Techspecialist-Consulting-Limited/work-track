@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { Copy, MailPlus, RefreshCw, Send, Trash2 } from "lucide-react";
+import { Copy, Mail, MailPlus, RefreshCw, Send, Trash2 } from "lucide-react";
 import { ProfileMenu } from "@/components/worklog/ProfileMenu";
 import {
   createEmployeeInvitation,
@@ -11,6 +11,7 @@ import {
   getSessionRole,
   getSessionUser,
   resendEmployeeInvitation,
+  retryInvitationEmail,
   revokeEmployeeInvitation,
   subscribeToDatabase,
 } from "@/lib/worklog/repository";
@@ -266,8 +267,31 @@ export function InvitationsAdmin() {
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_STYLE[invite.status] ?? STATUS_STYLE.pending}`}>
                       {invite.status}
                     </span>
+                    {invite.status === "pending" && invite.emailStatus ? (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                          invite.emailStatus === "sent"
+                            ? "bg-[#ECFDF3] text-[#067647]"
+                            : invite.emailStatus === "failed"
+                              ? "bg-[#FEF3F2] text-[#B42318]"
+                              : "bg-[#F1F0F6] text-[#6B6880]"
+                        }`}
+                        title={invite.emailLastError ?? undefined}
+                      >
+                        email {invite.emailStatus}
+                      </span>
+                    ) : null}
                     {invite.status === "pending" ? (
                       <span className="flex items-center gap-1">
+                        {invite.emailStatus === "failed" || invite.emailStatus === "skipped" ? (
+                          <button
+                            type="button"
+                            onClick={() => void refreshAfter(retryInvitationEmail(invite.id), "Email retry attempted.")}
+                            className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#E7E6F0] px-2.5 text-[11px] font-semibold text-[#53506B] transition hover:bg-[#F7F7FC]"
+                          >
+                            <Mail size={12} aria-hidden="true" /> Retry email
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => copyLink(invite)}
