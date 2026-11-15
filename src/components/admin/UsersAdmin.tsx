@@ -11,6 +11,7 @@ import {
   subscribeToDatabase,
 } from "@/lib/worklog/repository";
 import type { AdminUser } from "@/app/api/admin/users/route";
+import { DeleteEmployeeDialog } from "./DeleteEmployeeDialog";
 
 function roleBadges(user: AdminUser) {
   return user.memberships.length ? (
@@ -42,6 +43,29 @@ export function UsersAdmin() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [deletingUser, setDeletingUser] = useState<AdminUser | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  async function confirmDelete() {
+    if (!deletingUser || deleteBusy) return;
+    setDeleteBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await deleteEmployee(deletingUser.employeeId);
+      if (!result || result.ok === false) {
+        setError(result?.message ?? "That change could not be saved.");
+        return;
+      }
+      setNotice(`${deletingUser.fullName} deleted.`);
+      setDeletingUser(null);
+      await load();
+    } catch {
+      setError("Could not reach the server. Try again.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -146,18 +170,7 @@ export function UsersAdmin() {
                       type="button"
                       disabled={busyId === user.employeeId || isSelf}
                       title="Permanently remove this account — history is preserved but anonymised"
-                      onClick={() => {
-                        if (window.confirm(
-                          `Permanently delete ${user.fullName}${user.employeeCode ? ` (${user.employeeCode})` : ""}?\n\nRoles: ${user.memberships.map((m) => m.role).join(", ") || "none"} · ${user.workArrangement === "client_site" ? `Client-site → ${user.clientName ?? "unknown"}` : "In-house"}\n\nTheir sign-in identity and profile will be removed so they could register again as a new employee. ` +
-                          (user.hasWorkRecords
-                            ? "Recorded work history is preserved but anonymised as \"Deleted employee\"."
-                            : "They have no recorded work, so the profile will be fully removed.") +
-                          "\n\nThis cannot be undone."
-                        )) {
-                          setBusyId(user.employeeId);
-                          void act(deleteEmployee(user.employeeId), `${user.fullName} deleted.`).finally(() => setBusyId(null));
-                        }
-                      }}
+                      onClick={() => setDeletingUser(user)}
                       className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#FDECEC] px-2.5 text-[11px] font-semibold text-[#B42318] hover:bg-[#FDECEC] disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Trash2 size={12} aria-hidden="true" /> Delete
@@ -178,6 +191,17 @@ export function UsersAdmin() {
       <p className="flex items-center gap-1.5 text-[11px] text-[#8A8FA8]">
         <ShieldCheck size={12} aria-hidden="true" /> Only configuration admins can manage users. Deactivation takes effect on the next page load.
       </p>
+
+      {deletingUser ? (
+        <DeleteEmployeeDialog
+          user={deletingUser}
+          busy={deleteBusy}
+          onCancel={() => {
+            if (!deleteBusy) setDeletingUser(null);
+          }}
+          onConfirm={() => void confirmDelete()}
+        />
+      ) : null}
     </div>
   );
 }
