@@ -62,6 +62,7 @@ function database(overrides: Partial<WorkLogDatabase> = {}): WorkLogDatabase {
     progressUpdates: [],
     entries: [],
     breaks: [],
+    attachments: [],
     statusHistory: [],
     ...overrides,
   };

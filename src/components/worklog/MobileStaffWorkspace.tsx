@@ -13,7 +13,6 @@ import {
   ListChecks,
   Plus,
   Search,
-  Square,
   Users,
   X,
   Zap,
@@ -21,9 +20,12 @@ import {
 import { WorkTrackSelect } from "@/components/WorkTrackSelect";
 import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
-import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
+import { formatDateLabel, formatMinutes } from "@/lib/worklog/time";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
+import { BreakStatus } from "./BreakStatus";
+import { EvidenceAttachments } from "./EvidenceAttachments";
+import { ComplaintButton } from "./ComplaintButton";
 import { ClientSiteFields } from "./ClientSiteFields";
 import {
   MOBILE_BASE_INPUT_CLASS,
@@ -44,6 +46,12 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
   const [adjustSheetOpen, setAdjustSheetOpen] = useState(false);
   const [confirmBreak, setConfirmBreak] = useState(false);
   const [showProjectDetails, setShowProjectDetails] = useState(false);
+  const [subtaskAdderOpen, setSubtaskAdderOpen] = useState(false);
+  const [adderProjectId, setAdderProjectId] = useState(c.projectChoice);
+  if (adderProjectId !== c.projectChoice) {
+    setAdderProjectId(c.projectChoice);
+    setSubtaskAdderOpen(false);
+  }
   const [keyboardInset, setKeyboardInset] = useState(0);
 
   useEffect(() => {
@@ -100,10 +108,6 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
     setAdjustSheetOpen(true);
   }
 
-  const breakElapsed = c.activeBreak
-    ? formatMinutes(Math.max(0, Math.round((c.now.getTime() - new Date(c.activeBreak.startAt).getTime()) / 60_000)))
-    : "";
-
   const projectSearchTrimmed = c.projectSearch.trim();
   const projectSearchExact = c.filteredProjects.some(
     (project) => project.name.toLocaleLowerCase() === projectSearchTrimmed.toLocaleLowerCase()
@@ -157,6 +161,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               <CalendarDays size={15} aria-hidden="true" />
               My Records
             </button>
+            <ComplaintButton compact />
             <ProfileMenu
               name={c.employee?.name ?? "Employee"}
               role={c.employee ? `${c.employee.role} · ${c.employee.department}` : "Staff"}
@@ -217,24 +222,8 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
         </div>
 
         {c.activeBreak ? (
-          <section
-            aria-label="Active break"
-            className="mb-4 flex flex-col gap-3 rounded-2xl border border-[#F6D99A] bg-[#FFF6E5] p-4"
-          >
-            <div className="flex items-center gap-2 text-sm font-semibold text-[#9A6200]">
-              <Coffee size={17} aria-hidden="true" />
-              On break since {formatTime(c.activeBreak.startAt)}
-              <span className="ml-auto rounded-full bg-[#FDEBC8] px-2 py-0.5 text-[11px] font-bold text-[#8A5A00]">
-                {breakElapsed} elapsed
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={c.handleEndBreak}
-              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F59E0B] px-4 text-sm font-semibold text-white transition hover:bg-[#DB8A08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] focus-visible:ring-offset-2"
-            >
-              <Square size={14} aria-hidden="true" /> End Break
-            </button>
+          <section aria-label="Active break" className="mb-4">
+            <BreakStatus startAt={c.activeBreak.startAt} onEnd={c.handleEndBreak} />
           </section>
         ) : (
           <div className="space-y-4">
@@ -294,7 +283,7 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               >
                 <span className="min-w-0">
                   <span className="block text-[10px] font-semibold uppercase tracking-wide text-[#8B7BE8]">
-                    Project / Main Task
+                    Select Project
                   </span>
                   <span className={`block truncate text-[15px] font-bold ${c.selectedProject ? "text-[#17172F]" : "text-[#6C45F5]"}`}>
                     {c.selectedProject?.name ?? "Select a project"}
@@ -335,64 +324,46 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                   value={c.activityChoice}
                   onChange={c.setActivityChoice}
                   options={activityOptions}
-                  placeholder={c.selectedProject ? "Select an activity" : "Choose a project first"}
+                  placeholder={c.selectedProject ? "Select an activity or subtask…" : "Choose a project first"}
                   disabled={!c.selectedProject}
                 />
                 {c.selectedProject ? (
-                  <div className="mt-2 rounded-xl border border-[#EEEAF2] bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold text-[#53506B]">
-                        Subtasks for this project
-                      </span>
-                      {c.projectSubtasks.length ? (
-                        <span className="text-[10px] font-medium text-[#9A97AD]">
-                          {c.projectSubtasks.length}
-                        </span>
-                      ) : null}
-                    </div>
-                    {c.projectSubtasks.length ? (
-                      <ul className="mt-1.5 space-y-1">
-                        {c.projectSubtasks.map((subtask) => (
-                          <li
-                            key={subtask.id}
-                            className="flex items-center justify-between gap-2 text-xs text-[#39364F]"
-                          >
-                            <span className="min-w-0 truncate">{subtask.title}</span>
-                            <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-[#9A97AD]">
-                              {subtask.status}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-1.5 text-[11px] leading-4 text-[#9A97AD]">
-                        No subtasks yet — add the pieces of work under this project.
-                      </p>
-                    )}
-                    <div className="mt-2 flex gap-1.5">
-                      <input
-                        value={c.newSubtaskTitle}
-                        maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
-                        onChange={(event) => c.setNewSubtaskTitle(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            c.addProjectSubtask();
-                          }
-                        }}
-                        placeholder="New subtask name"
-                        aria-label="New subtask name"
-                        className={`${MOBILE_BASE_INPUT_CLASS} min-h-10 flex-1 text-sm`}
-                      />
-                      <button
-                        type="button"
-                        onClick={c.addProjectSubtask}
-                        className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg border border-[#CFC8F3] bg-[#F5F1FF] px-3 text-xs font-semibold text-[#5A3ED0] transition hover:bg-[#EEE7FD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                      >
-                        <Plus size={13} aria-hidden="true" />
-                        Add
-                      </button>
-                    </div>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setSubtaskAdderOpen((value) => !value)}
+                      aria-expanded={subtaskAdderOpen}
+                      className="inline-flex min-h-9 items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold text-[#6C45F5] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                    >
+                      <Plus size={13} aria-hidden="true" />
+                      {subtaskAdderOpen ? "Hide add subtask" : "Add subtask"}
+                    </button>
+                    {subtaskAdderOpen ? (
+                      <div className="mt-1.5 flex gap-1.5 rounded-xl border border-[#EEEAF2] bg-white p-2">
+                        <input
+                          value={c.newSubtaskTitle}
+                          maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                          onChange={(event) => c.setNewSubtaskTitle(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              c.addProjectSubtask();
+                            }
+                          }}
+                          placeholder="New subtask name"
+                          aria-label="New subtask name"
+                          className={`${MOBILE_BASE_INPUT_CLASS} min-h-10 flex-1 text-sm`}
+                        />
+                        <button
+                          type="button"
+                          onClick={c.addProjectSubtask}
+                          className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg border border-[#CFC8F3] bg-[#F5F1FF] px-3 text-xs font-semibold text-[#5A3ED0] transition hover:bg-[#EEE7FD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                        >
+                          <Plus size={13} aria-hidden="true" />
+                          Add
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -510,17 +481,21 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
             </section>
 
             <section aria-labelledby="mobile-evidence-heading">
-              <h2 id="mobile-evidence-heading" className="mb-1.5 text-sm font-semibold text-[#17172F]">
-                Evidence
+              <h2 id="mobile-evidence-heading" className="mb-0.5 text-sm font-semibold text-[#17172F]">
+                Evidence &amp; Attachments
               </h2>
-              <button
-                type="button"
-                onClick={() => c.setShowEvidenceLink((value) => !value)}
-                aria-expanded={c.showEvidenceLink}
-                className="inline-flex min-h-9 items-center text-xs font-semibold text-[#6C45F5] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-              >
-                {c.showEvidenceLink ? "Hide evidence" : "Add evidence (optional)"}
-              </button>
+              <p className="mb-1.5 text-[11px] text-[#9A97AD]">
+                Attach documents or images to support your work entry.
+              </p>
+              <EvidenceAttachments
+                items={c.attachments}
+                onFiles={c.handleAttachmentFiles}
+                onRemove={c.removeAttachment}
+                onInvalid={c.setError}
+                disabled={Boolean(c.activeBreak)}
+                onAddLink={() => c.setShowEvidenceLink((value) => !value)}
+                linkActive={c.showEvidenceLink}
+              />
               {c.showEvidenceLink ? (
                 <label className="mt-1 block text-[11px] font-semibold text-[#53506B]">
                   Evidence link
@@ -653,15 +628,18 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
           c.setProjectError(null);
           c.setDuplicateProject(null);
         }}
-        title="Choose a project"
+        title="Select Project"
       >
+        <p className="mb-2 text-xs text-[#9A97AD]">
+          Find the project or main task you worked on.
+        </p>
         <label className="relative mb-2 block">
           <Search size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9A93C0]" />
           <input
             autoFocus
             value={c.projectSearch}
             onChange={(event) => c.setProjectSearch(event.target.value)}
-            placeholder="Search projects…"
+            placeholder="Search projects or main tasks…"
             aria-label="Search projects"
             className={`${MOBILE_BASE_INPUT_CLASS} min-h-11 pl-9`}
           />

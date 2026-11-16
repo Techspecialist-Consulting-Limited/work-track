@@ -260,6 +260,17 @@ export interface StatusHistoryEvent {
   changedAt: string;
 }
 
+export interface WorkEntryAttachment {
+  id: string;
+  /** Null while the upload is pending (not yet linked to a saved entry). */
+  entryId: string | null;
+  employeeId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
 export interface WorkLogDatabase {
   version: 2;
   employees: Employee[];
@@ -275,5 +286,6 @@ export interface WorkLogDatabase {
   progressUpdates: ProgressUpdate[];
   entries: WorkEntry[];
   breaks: BreakEntry[];
+  attachments: WorkEntryAttachment[];
   statusHistory: StatusHistoryEvent[];
 }

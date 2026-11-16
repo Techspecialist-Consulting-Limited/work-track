@@ -45,7 +45,8 @@ import { getDaySummary, getEntryLabel } from "@/lib/worklog/selectors";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getZonedDateKey, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
-import type { BreakEntry, Employee, TaskStatus, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
+import type { BreakEntry, Employee, TaskStatus, WorkEntry, WorkEntryAttachment, WorkLogDatabase } from "@/lib/worklog/types";
+import { EntryAttachments } from "./EntryAttachments";
 import type { DaySummary } from "@/lib/worklog/selectors";
 
 function shiftDateKey(key: string, days: number): string {
@@ -776,6 +777,13 @@ function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDa
   const projectDescription = project?.description ?? task.description;
   const entries = [...item.entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
   const subtaskById = new Map(item.subtasks.map((sub) => [sub.subtask.id, sub.subtask]));
+  const attachmentsByEntry = new Map<string, WorkEntryAttachment[]>();
+  for (const row of db.attachments) {
+    if (!row.entryId) continue;
+    const list = attachmentsByEntry.get(row.entryId) ?? [];
+    list.push(row);
+    attachmentsByEntry.set(row.entryId, list);
+  }
 
   return (
     <>
@@ -808,6 +816,7 @@ function ActivityProjectGroup({ item, db }: { item: HierarchyTask; db: WorkLogDa
                   <ExternalLink size={10} aria-hidden="true" /> Evidence
                 </a>
               ) : null}
+              <EntryAttachments attachments={attachmentsByEntry.get(entry.id) ?? []} />
             </td>
             <td className="px-3 py-2.5">
               <ActivityStatusBadge status={sub ? sub.status : task.currentStatus} />
@@ -880,6 +889,13 @@ function ClientSiteTable({
   db: WorkLogDatabase;
   orgName: string;
 }) {
+  const attachmentsByEntry = new Map<string, WorkEntryAttachment[]>();
+  for (const row of db.attachments) {
+    if (!row.entryId) continue;
+    const list = attachmentsByEntry.get(row.entryId) ?? [];
+    list.push(row);
+    attachmentsByEntry.set(row.entryId, list);
+  }
   return (
     <section className="mt-5 first:mt-0" aria-label={`Client-site Work Log — ${orgName}`}>
       <h3 className="mb-2 text-xs font-bold uppercase tracking-[0.08em] text-[#5C5478]">
@@ -934,6 +950,7 @@ function ClientSiteTable({
                         <ExternalLink size={10} aria-hidden="true" /> Evidence
                       </a>
                     ) : null}
+                    <EntryAttachments attachments={attachmentsByEntry.get(entry.id) ?? []} />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-xs text-[#53506B]">
                     {activityLocationLabel(entry.workLocation)}

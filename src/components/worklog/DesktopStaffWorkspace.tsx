@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Building2,
   CalendarDays,
@@ -7,10 +8,8 @@ import {
   House,
   Info,
   ListChecks,
-  Paperclip,
   Plus,
   Save,
-  Square,
   Users,
   X,
   Zap,
@@ -18,11 +17,15 @@ import {
 import { WorkTrackSelect } from "@/components/WorkTrackSelect";
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
-import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
+import { formatDateLabel, formatMinutes } from "@/lib/worklog/time";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
+import { BreakStatus } from "./BreakStatus";
+import { ProjectSearchSelect } from "./ProjectSearchSelect";
+import { EvidenceAttachments } from "./EvidenceAttachments";
+import { ComplaintButton } from "./ComplaintButton";
 import { ClientSiteFields } from "./ClientSiteFields";
-import { BASE_INPUT_CLASS, INPUT_CLASS, NEW_PROJECT_OPTION, SCHEDULED_MINUTES } from "./shared";
+import { BASE_INPUT_CLASS, INPUT_CLASS, SCHEDULED_MINUTES } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
 const LOCATION_ICONS = {
@@ -42,7 +45,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     activeTeamId,
     activeTeam,
     chooseTeam,
-    filteredProjects,
+    projects,
     projectSearch,
     setProjectSearch,
     projectChoice,
@@ -79,6 +82,9 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     setEvidenceLink,
     showEvidenceLink,
     setShowEvidenceLink,
+    attachments,
+    handleAttachmentFiles,
+    removeAttachment,
     isReportedOvertime,
     setIsReportedOvertime,
     showTimeAdjustment,
@@ -87,6 +93,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     selectedSlot,
     setSelectedSlot,
     error,
+    setError,
     activeBreak,
     submitting,
     formRef,
@@ -108,6 +115,13 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     employee,
     lockAutoSlot,
   } = c;
+
+  const [subtaskAdderOpen, setSubtaskAdderOpen] = useState(false);
+  const [adderProjectId, setAdderProjectId] = useState(projectChoice);
+  if (adderProjectId !== projectChoice) {
+    setAdderProjectId(projectChoice);
+    setSubtaskAdderOpen(false);
+  }
 
   const timeOptions = [
     ...slots.map((slot) => ({
@@ -137,33 +151,6 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     const slot = slots.find((candidate) => candidate.key === value);
     if (slot) selectSlot(slot);
   };
-
-  const projectSearchTrimmed = projectSearch.trim();
-  const projectSearchExact = filteredProjects.some(
-    (project) => project.name.toLocaleLowerCase() === projectSearchTrimmed.toLocaleLowerCase()
-  );
-  const projectOptions = [
-    { value: "", label: "Select a project", description: "Choose the project or main task" },
-    ...filteredProjects.map((project) => ({
-      value: project.id,
-      label: project.name,
-      description:
-        project.origin === "staff"
-          ? project.promotedAt
-            ? "Staff-added · approved"
-            : "Staff-added · pending review"
-          : project.description,
-    })),
-    {
-      value: NEW_PROJECT_OPTION,
-      label:
-        projectSearchTrimmed.length >= 2 && !projectSearchExact
-          ? `Add “${projectSearchTrimmed}” as a project`
-          : "Add a project / task…",
-      description: "Not in the list — create it for your team",
-      tone: "success" as const,
-    },
-  ];
 
   const activityOptions = [
     { value: "", label: "No specific activity", description: "Log against the project" },
@@ -210,6 +197,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               <CalendarDays size={15} aria-hidden="true" />
               My Records
             </button>
+            <ComplaintButton />
             <ProfileMenu
               name={employee?.name ?? "Employee"}
               role={employee ? `${employee.role} · ${employee.department}` : "Staff"}
@@ -372,28 +360,24 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                   ) : (
                     <>
                   <div>
-                    <span className="text-xs font-semibold text-[#53506B]">Project / Main Task</span>
-                    <div className="mt-1 grid grid-cols-2 gap-2">
-                      <input
-                        value={projectSearch}
-                        onChange={(event) => setProjectSearch(event.target.value)}
-                        aria-label="Search projects for this team"
-                        placeholder="Search projects…"
-                        className={BASE_INPUT_CLASS}
-                        disabled={Boolean(editingId)}
-                      />
-                      <div className="flex items-center gap-1">
-                        <div className="min-w-0 flex-1">
-                          <WorkTrackSelect
-                            label="Choose a project"
-                            value={projectChoice}
-                            onChange={handleProjectSelect}
-                            options={projectOptions}
-                            placeholder="Select a project"
-                            disabled={Boolean(editingId) || !activeTeamId}
-                          />
-                        </div>
-                        {selectedProject?.description ? (
+                    <span className="text-xs font-semibold text-[#53506B]">Select Project</span>
+                    <p className="mt-0.5 text-[11px] text-[#9A97AD]">
+                      Find the project or main task you worked on.
+                    </p>
+                    <div className="mt-1 flex items-start gap-1.5">
+                      <div className="min-w-0 flex-1">
+                        <ProjectSearchSelect
+                          projects={projects}
+                          value={projectChoice}
+                          selectedProject={selectedProject}
+                          onPick={handleProjectSelect}
+                          onQueryChange={setProjectSearch}
+                          query={projectSearch}
+                          inputClassName={BASE_INPUT_CLASS}
+                          disabled={Boolean(editingId) || !activeTeamId}
+                        />
+                      </div>
+                      {selectedProject?.description ? (
                           <button
                             type="button"
                             aria-label="Project description"
@@ -404,7 +388,6 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                             <Info size={15} aria-hidden="true" />
                           </button>
                         ) : null}
-                      </div>
                     </div>
                     {selectedProject?.description && showProjectInfo ? (
                       <div className="mt-2 rounded-lg border border-[#EEEAF8] bg-white p-2.5 text-xs leading-5 text-[#53506B]">
@@ -502,65 +485,47 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                         value={activityChoice}
                         onChange={setActivityChoice}
                         options={activityOptions}
-                        placeholder={selectedProject ? "Select an activity" : "Choose a project first"}
+                        placeholder={selectedProject ? "Select an activity or subtask…" : "Choose a project first"}
                         disabled={!selectedProject}
                       />
                     </div>
                     {selectedProject ? (
-                      <div className="mt-2 rounded-lg border border-[#EEEAF2] bg-white p-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold text-[#53506B]">
-                            Subtasks for this project
-                          </span>
-                          {projectSubtasks.length ? (
-                            <span className="text-[10px] font-medium text-[#9A97AD]">
-                              {projectSubtasks.length} {projectSubtasks.length === 1 ? "subtask" : "subtasks"}
-                            </span>
-                          ) : null}
-                        </div>
-                        {projectSubtasks.length ? (
-                          <ul className="mt-1.5 space-y-1">
-                            {projectSubtasks.map((subtask) => (
-                              <li
-                                key={subtask.id}
-                                className="flex items-center justify-between gap-2 text-xs text-[#39364F]"
-                              >
-                                <span className="min-w-0 truncate">{subtask.title}</span>
-                                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-[#9A97AD]">
-                                  {subtask.status}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="mt-1.5 text-[11px] leading-4 text-[#9A97AD]">
-                            No subtasks yet — add the pieces of work you will do under this project.
-                          </p>
-                        )}
-                        <div className="mt-2 flex gap-1.5">
-                          <input
-                            value={newSubtaskTitle}
-                            maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
-                            onChange={(event) => setNewSubtaskTitle(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                addProjectSubtask();
-                              }
-                            }}
-                            placeholder="New subtask name"
-                            aria-label="New subtask name"
-                            className={`${BASE_INPUT_CLASS} min-h-9 flex-1 text-xs`}
-                          />
-                          <button
-                            type="button"
-                            onClick={addProjectSubtask}
-                            className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-[#CFC8F3] bg-[#F5F1FF] px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#EEE7FD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                          >
-                            <Plus size={12} aria-hidden="true" />
-                            Add
-                          </button>
-                        </div>
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => setSubtaskAdderOpen((value) => !value)}
+                          aria-expanded={subtaskAdderOpen}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold text-[#6C45F5] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                        >
+                          <Plus size={13} aria-hidden="true" />
+                          {subtaskAdderOpen ? "Hide add subtask" : "Add subtask"}
+                        </button>
+                        {subtaskAdderOpen ? (
+                          <div className="mt-1.5 flex gap-1.5 rounded-lg border border-[#EEEAF2] bg-white p-2">
+                            <input
+                              value={newSubtaskTitle}
+                              maxLength={WORKLOG_RULES.subtaskTitleMaxLength}
+                              onChange={(event) => setNewSubtaskTitle(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addProjectSubtask();
+                                }
+                              }}
+                              placeholder="New subtask name"
+                              aria-label="New subtask name"
+                              className={`${BASE_INPUT_CLASS} min-h-9 flex-1 text-xs`}
+                            />
+                            <button
+                              type="button"
+                              onClick={addProjectSubtask}
+                              className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-[#CFC8F3] bg-[#F5F1FF] px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#EEE7FD] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                            >
+                              <Plus size={12} aria-hidden="true" />
+                              Add
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -694,18 +659,21 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
 
                 <section aria-labelledby="additional-details-heading" className="rounded-xl border border-[#E7E6F0] bg-[#FCFBFF] p-4">
                   <h2 id="additional-details-heading" className="text-[13px] font-semibold text-[#17172F] sm:text-[15px]">
-                    Additional Details
+                    Evidence &amp; Attachments
                   </h2>
+                  <p className="mt-0.5 text-[11px] text-[#9A97AD]">
+                    Attach documents or images to support your work entry.
+                  </p>
                   <div className="mt-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowEvidenceLink((value) => !value)}
-                      aria-expanded={showEvidenceLink}
-                      className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-[#E7E6F0] bg-white px-3 text-xs font-semibold text-[#5A3ED0] transition hover:border-[#CFC8F3] hover:bg-[#F5F1FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                    >
-                      <Paperclip size={13} aria-hidden="true" />
-                      {showEvidenceLink ? "Hide evidence" : "Add evidence (optional)"}
-                    </button>
+                    <EvidenceAttachments
+                      items={attachments}
+                      onFiles={handleAttachmentFiles}
+                      onRemove={removeAttachment}
+                      onInvalid={setError}
+                      disabled={Boolean(activeBreak)}
+                      onAddLink={() => setShowEvidenceLink((value) => !value)}
+                      linkActive={showEvidenceLink}
+                    />
                     {showEvidenceLink ? (
                       <label className="mt-2 block rounded-lg border border-[#EEEAF2] bg-white p-2.5 text-[11px] font-medium text-[#777A91]">
                         Evidence link
@@ -736,19 +704,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
           ) : null}
 
           {activeBreak ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#F6D99A] bg-[#FFF6E5] px-4 py-3">
-              <div className="flex items-center gap-2 text-sm font-semibold text-[#9A6200]">
-                <Coffee size={17} aria-hidden="true" />
-                On break since {formatTime(activeBreak.startAt)}
-              </div>
-              <button
-                type="button"
-                onClick={handleEndBreak}
-                className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#F59E0B] px-4 text-sm font-semibold text-white transition hover:bg-[#DB8A08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B] focus-visible:ring-offset-2"
-              >
-                <Square size={14} aria-hidden="true" /> End Break
-              </button>
-            </div>
+            <BreakStatus startAt={activeBreak.startAt} onEnd={handleEndBreak} />
           ) : null}
 
           {!activeBreak ? (

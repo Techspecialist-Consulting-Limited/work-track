@@ -85,6 +85,20 @@
       "when": 1794800000000,
       "tag": "0012_invitation_email_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794900000000,
+      "tag": "0013_entry_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795000000000,
+      "tag": "0014_complaints",
+      "breakpoints": true
     }
   ]
 }

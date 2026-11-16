@@ -32,7 +32,6 @@ import {
 } from "@/lib/worklog/repository";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { dateKeyOf, formatTime } from "@/lib/worklog/time";
-import { breakDeadline } from "@/lib/worklog/validation";
 import {
   getDaySummary,
   getOpenTasks,
@@ -52,6 +51,7 @@ import {
   slotEndInstant,
   toLagosIso,
 } from "./shared";
+import { isEvidenceImage, type EvidenceItem } from "./EvidenceAttachments";
 
 const subscribeNoop = () => () => {};
 const getClientMounted = () => true;
@@ -85,6 +85,7 @@ export function useWorkLogController() {
   const [location, setLocation] = useState<WorkLocation>("office");
   const [evidenceLink, setEvidenceLink] = useState("");
   const [showEvidenceLink, setShowEvidenceLink] = useState(false);
+  const [attachments, setAttachments] = useState<EvidenceItem[]>([]);
   const [isReportedOvertime, setIsReportedOvertime] = useState(false);
   const [showTimeAdjustment, setShowTimeAdjustment] = useState(false);
   const [slotLocked, setSlotLocked] = useState(false);
@@ -285,6 +286,10 @@ export function useWorkLogController() {
     setDescription("");
     setEvidenceLink("");
     setShowEvidenceLink(false);
+    setAttachments((prev) => {
+      for (const item of prev) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return [];
+    });
     setIsReportedOvertime(false);
     setShowTimeAdjustment(false);
     setSlotLocked(false);
@@ -320,6 +325,19 @@ export function useWorkLogController() {
     setLocation(entry.workLocation);
     setEvidenceLink(entry.evidenceLink ?? "");
     setShowEvidenceLink(Boolean(entry.evidenceLink));
+    setAttachments(
+      getDatabaseSnapshot()
+        .attachments.filter((row) => row.entryId === entry.id)
+        .map((row) => ({
+          key: row.id,
+          id: row.id,
+          fileName: row.fileName,
+          mimeType: row.mimeType,
+          sizeBytes: row.sizeBytes,
+          status: "ready" as const,
+          linked: true,
+        }))
+    );
     setIsReportedOvertime(entry.isReportedOvertime);
     setShowTimeAdjustment(false);
     setSlotLocked(true);
@@ -528,6 +546,7 @@ export function useWorkLogController() {
       workLocation: location,
       evidenceLink: evidenceLink || undefined,
       isReportedOvertime,
+      attachmentIds: pendingAttachmentIds(),
     };
     const result = editingId ? editWorkEntry(editingId, input) : addWorkEntry(input);
     if (!result.ok) {
@@ -562,6 +581,7 @@ export function useWorkLogController() {
       workLocation: location,
       evidenceLink: evidenceLink || undefined,
       isReportedOvertime,
+      attachmentIds: pendingAttachmentIds(),
     };
     const result = editingId ? editWorkEntry(editingId, input) : addWorkEntry(input);
     if (!result.ok) {
@@ -613,6 +633,57 @@ export function useWorkLogController() {
     }
   }
 
+  async function handleAttachmentFiles(files: File[]) {
+    for (const file of files) {
+      const key = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${file.name}`;
+      const item: EvidenceItem = {
+        key,
+        id: null,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        previewUrl: isEvidenceImage({ fileName: file.name, mimeType: file.type }) ? URL.createObjectURL(file) : undefined,
+        status: "uploading",
+      };
+      setAttachments((prev) => [...prev, item]);
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/api/worklog/attachments", { method: "POST", body: form });
+        const data = (await res.json().catch(() => null)) as
+          | { ok: boolean; message?: string; attachment?: { id: string; fileName: string; mimeType: string; sizeBytes: number; entryId: string | null; employeeId: string; createdAt: string } }
+          | null;
+        setAttachments((prev) =>
+          prev.map((row) =>
+            row.key === key
+              ? data?.ok && data.attachment
+                ? { ...item, ...data.attachment, key, previewUrl: item.previewUrl, status: "ready" as const }
+                : { ...row, status: "error" as const, error: data?.message ?? "Upload failed." }
+              : row
+          )
+        );
+      } catch {
+        setAttachments((prev) =>
+          prev.map((row) => (row.key === key ? { ...row, status: "error" as const, error: "Upload failed. Check your connection." } : row))
+        );
+      }
+    }
+  }
+
+  async function removeAttachment(key: string) {
+    const item = attachments.find((row) => row.key === key);
+    if (!item) return;
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    if (item.id) {
+      await fetch(`/api/worklog/attachments/${item.id}`, { method: "DELETE" }).catch(() => {});
+    }
+    setAttachments((prev) => prev.filter((row) => row.key !== key));
+  }
+
+  function pendingAttachmentIds(): string[] {
+    return attachments.filter((row) => row.id && !row.linked && row.status === "ready").map((row) => row.id as string);
+  }
+
   function deleteEntry(entryId: string) {
     const result = deleteWorkEntry(entryId);
     if (!result.ok) setError(result.message);
@@ -641,13 +712,6 @@ export function useWorkLogController() {
       setNotice(auto ? "Break ended automatically (daily allowance or end of workday reached)." : "Break ended.");
     }
   }
-
-  useEffect(() => {
-    if (!activeBreak || now.getTime() < breakDeadline(db.breaks, activeBreak).getTime()) return;
-    const timer = window.setTimeout(() => handleEndBreak(true), 0);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBreak, now]);
 
   function openRecords() {
     setRecordsOpen(true);
@@ -913,6 +977,9 @@ export function useWorkLogController() {
     setEvidenceLink,
     showEvidenceLink,
     setShowEvidenceLink,
+    attachments,
+    handleAttachmentFiles,
+    removeAttachment,
     isReportedOvertime,
     setIsReportedOvertime,
     showTimeAdjustment,

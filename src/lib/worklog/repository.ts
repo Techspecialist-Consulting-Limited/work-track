@@ -53,6 +53,7 @@ const EMPTY_DB: WorkLogDatabase = {
   progressUpdates: [],
   entries: [],
   breaks: [],
+  attachments: [],
   statusHistory: [],
 };
 
@@ -263,6 +264,8 @@ export interface EntryInput {
   workLocation: WorkLocation;
   evidenceLink?: string;
   isReportedOvertime?: boolean;
+  /** Pending attachment ids from POST /api/worklog/attachments. */
+  attachmentIds?: string[];
 }
 
 export interface TaskInput {

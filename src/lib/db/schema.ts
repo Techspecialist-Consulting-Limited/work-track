@@ -641,3 +641,157 @@ export const worktrackSettings = pgTable("worktrack_settings", {
   value: jsonb("value").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Evidence files attached to work entries. Binaries live in private object
+ * storage (Supabase Storage bucket `worktrack-evidence`); this table only
+ * holds metadata. `entry_id` is NULL between upload and entry save — pending
+ * uploads are linked by addWorkEntry/editWorkEntry and abandoned rows are
+ * reaped by the attachments API.
+ */
+export const timeEntryAttachments = pgTable(
+  "time_entry_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    entryId: uuid("entry_id").references(() => timeEntries.id, { onDelete: "cascade" }),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    /** Object key inside the private storage bucket. */
+    storagePath: text("storage_path").notNull(),
+    uploadedByMembershipId: uuid("uploaded_by_membership_id").references(() => memberships.id),
+    ...timestamps,
+  },
+  (t) => [
+    index("time_entry_attachments_entry_idx").on(t.entryId),
+    index("time_entry_attachments_employee_idx").on(t.employeeId),
+    index("time_entry_attachments_pending_idx").on(t.employeeId, t.createdAt).where(sql`${t.entryId} IS NULL`),
+  ]
+);
+
+/* -------------------------------------------------------------------------- */
+/* Complaints: one shared record + one conversation history (web + mobile).   */
+/* Binaries live in private Supabase Storage; DB stores metadata/links only.   */
+/* -------------------------------------------------------------------------- */
+
+export const complaints = pgTable(
+  "complaints",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Human-readable reference, e.g. WT-0001. */
+    reference: text("reference").notNull(),
+    employeeId: uuid("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    category: text("category").notNull(),
+    subject: text("subject").notNull(),
+    description: text("description").notNull(),
+    status: text("status").notNull().default("new"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+    unreadByManagement: boolean("unread_by_management").notNull().default(true),
+    unreadByStaff: boolean("unread_by_staff").notNull().default(false),
+    assignedToMembershipId: uuid("assigned_to_membership_id").references(() => memberships.id),
+    assignedToLabel: text("assigned_to_label"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    reopenedAt: timestamp("reopened_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("complaints_reference_key").on(t.reference),
+    index("complaints_employee_idx").on(t.employeeId, t.submittedAt),
+    index("complaints_status_idx").on(t.status, t.lastMessageAt),
+    check(
+      "complaints_status_check",
+      sql`status IN ('new', 'in_progress', 'awaiting_staff', 'resolved', 'reopened')`
+    ),
+    check(
+      "complaints_category_check",
+      sql`category IN ('payroll', 'workplace', 'scheduling', 'equipment', 'policy', 'other')`
+    ),
+    check("complaints_subject_not_blank", sql`length(btrim(subject)) > 0`),
+  ]
+);
+
+export const complaintMessages = pgTable(
+  "complaint_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    complaintId: uuid("complaint_id")
+      .notNull()
+      .references(() => complaints.id, { onDelete: "cascade" }),
+    senderType: text("sender_type").notNull(),
+    senderMembershipId: uuid("sender_membership_id").references(() => memberships.id),
+    senderEmployeeId: uuid("sender_employee_id").references(() => employees.id),
+    senderName: text("sender_name").notNull(),
+    senderRole: text("sender_role"),
+    body: text("body").notNull(),
+    meta: jsonb("meta").$type<{
+      type?: "status_change" | "resolution" | "request_info";
+      fromStatus?: string;
+      toStatus?: string;
+    } | null>(),
+    ...timestamps,
+  },
+  (t) => [
+    index("complaint_messages_complaint_idx").on(t.complaintId, t.createdAt),
+    check(
+      "complaint_messages_sender_type_check",
+      sql`sender_type IN ('staff', 'management', 'system')`
+    ),
+    check("complaint_messages_body_not_blank", sql`length(btrim(body)) > 0`),
+  ]
+);
+
+export const complaintStatusHistory = pgTable(
+  "complaint_status_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    complaintId: uuid("complaint_id")
+      .notNull()
+      .references(() => complaints.id, { onDelete: "cascade" }),
+    fromStatus: text("from_status"),
+    toStatus: text("to_status").notNull(),
+    changedByMembershipId: uuid("changed_by_membership_id").references(() => memberships.id),
+    changedByName: text("changed_by_name").notNull(),
+    changedByRole: text("changed_by_role").notNull(),
+    note: text("note"),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("complaint_status_history_complaint_idx").on(t.complaintId, t.changedAt),
+    check(
+      "complaint_status_history_to_check",
+      sql`to_status IN ('new', 'in_progress', 'awaiting_staff', 'resolved', 'reopened')`
+    ),
+  ]
+);
+
+export const complaintMessageAttachments = pgTable(
+  "complaint_message_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    complaintId: uuid("complaint_id")
+      .notNull()
+      .references(() => complaints.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").references(() => complaintMessages.id, { onDelete: "cascade" }),
+    /** Who owns/initiated the upload (staff employee or uploader context). */
+    employeeId: uuid("employee_id").references(() => employees.id),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    storagePath: text("storage_path").notNull(),
+    uploadedByMembershipId: uuid("uploaded_by_membership_id").references(() => memberships.id),
+    ...timestamps,
+  },
+  (t) => [
+    index("complaint_message_attachments_complaint_idx").on(t.complaintId),
+    index("complaint_message_attachments_message_idx").on(t.messageId),
+    index("complaint_message_attachments_pending_idx")
+      .on(t.complaintId, t.createdAt)
+      .where(sql`${t.messageId} IS NULL`),
+  ]
+);

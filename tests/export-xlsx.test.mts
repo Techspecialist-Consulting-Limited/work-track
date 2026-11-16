@@ -145,6 +145,7 @@ function database(): WorkLogDatabase {
         createdAt: "2026-11-06T12:00:00+01:00",
       },
     ],
+    attachments: [],
     statusHistory: [],
   };
 }

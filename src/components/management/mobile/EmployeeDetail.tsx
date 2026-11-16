@@ -19,7 +19,8 @@ import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
 import { downloadWorkLogWorkbook } from "@/lib/worklog/export-xlsx";
 import { getDaySummary } from "@/lib/worklog/selectors";
 import { durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
-import type { BreakEntry, Employee, TaskStatus, WorkEntry, WorkLogDatabase } from "@/lib/worklog/types";
+import type { BreakEntry, Employee, TaskStatus, WorkEntry, WorkEntryAttachment, WorkLogDatabase } from "@/lib/worklog/types";
+import { EntryAttachments } from "../EntryAttachments";
 import { buildEmployeeHierarchy, type HierarchyTask } from "../TaskHierarchy";
 import { Avatar, BottomSheet, MetricCard, dateKeyParts, pad2, shiftDateKey } from "./shared";
 
@@ -55,9 +56,11 @@ function ActivityEntryCard({
   entry,
   name,
   status,
+  attachments,
 }: {
   entry: WorkEntry;
   name: string;
+  attachments?: WorkEntryAttachment[];
   status?: TaskStatus;
 }) {
   return (
@@ -94,6 +97,7 @@ function ActivityEntryCard({
           <ExternalLink size={10} aria-hidden="true" /> Evidence
         </a>
       ) : null}
+      <EntryAttachments attachments={attachments ?? []} />
     </div>
   );
 }
@@ -102,12 +106,21 @@ function ActivityTaskCard({
   item,
   open,
   onToggle,
+  db,
 }: {
   item: HierarchyTask;
   open: boolean;
   onToggle: () => void;
+  db: WorkLogDatabase;
 }) {
   const { task } = item;
+  const attachmentsByEntry = new Map<string, WorkEntryAttachment[]>();
+  for (const row of db.attachments) {
+    if (!row.entryId) continue;
+    const list = attachmentsByEntry.get(row.entryId) ?? [];
+    list.push(row);
+    attachmentsByEntry.set(row.entryId, list);
+  }
   const directEntries = item.entries.filter((entry) => !entry.subtaskId);
   const sortedEntries = [...item.entries].sort((a, b) => a.startAt.localeCompare(b.startAt));
   const subtaskById = new Map(item.subtasks.map((sub) => [sub.subtask.id, sub]));
@@ -150,6 +163,7 @@ function ActivityTaskCard({
                   entry={entry}
                   name={sub ? sub.subtask.title : task.title}
                   status={sub ? sub.subtask.status : task.currentStatus}
+                  attachments={attachmentsByEntry.get(entry.id)}
                 />
               );
             })
@@ -188,6 +202,7 @@ function ActivityTaskCard({
                         entry={entry}
                         name={sub.subtask.title}
                         status={sub.subtask.status}
+                        attachments={attachmentsByEntry.get(entry.id)}
                       />
                     ))
                   )}
@@ -200,6 +215,7 @@ function ActivityTaskCard({
                 entry={entry}
                 name={task.title}
                 status={task.currentStatus}
+                attachments={attachmentsByEntry.get(entry.id)}
               />
             ))}
           </>
@@ -225,6 +241,13 @@ function ActivityClientCard({ entries, db }: { entries: WorkEntry[]; db: WorkLog
       ? db.organisations.find((row) => row.id === subcategory.clientOrganisationId)
       : undefined;
   const minutes = sorted.reduce((total, entry) => total + durationMinutes(entry.startAt, entry.endAt), 0);
+  const attachmentsByEntry = new Map<string, WorkEntryAttachment[]>();
+  for (const row of db.attachments) {
+    if (!row.entryId) continue;
+    const list = attachmentsByEntry.get(row.entryId) ?? [];
+    list.push(row);
+    attachmentsByEntry.set(row.entryId, list);
+  }
 
   return (
     <section className="overflow-hidden rounded-2xl border border-[#EAE8F2] bg-white shadow-[0_1px_2px_rgba(23,23,43,0.04)]">
@@ -252,6 +275,7 @@ function ActivityClientCard({ entries, db }: { entries: WorkEntry[]; db: WorkLog
               key={entry.id}
               entry={entry}
               name={[cat?.name, sub?.name].filter(Boolean).join(" › ") || "Client work"}
+              attachments={attachmentsByEntry.get(entry.id)}
             />
           );
         })}
@@ -467,6 +491,7 @@ export function EmployeeDetailMobile({
                   <ActivityClientCard key={`client-${block.orgId}`} entries={block.entries} db={db} />
                 ) : (
                   <ActivityTaskCard
+                  db={db}
                     key={block.item.task.id}
                     item={block.item}
                     open={openTasks.has(block.item.task.id)}
