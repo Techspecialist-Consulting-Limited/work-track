@@ -24,6 +24,7 @@ import {
   teamProjects,
   teams,
   timeEntries,
+  timeEntryAttachments,
 } from "./schema";
 import { loadWorkLogDb } from "./worklog-data";
 import { getAuthorizedTeamIds, getDefaultTeamId, isEmployeeInTeam, type WorkTrackMembership } from "@/lib/auth/authorize";
@@ -111,6 +112,28 @@ interface EntryInput {
   workLocation: "office" | "home";
   evidenceLink?: string;
   isReportedOvertime?: boolean;
+  /** Pending attachment ids uploaded via /api/worklog/attachments. */
+  attachmentIds?: string[];
+}
+
+/**
+ * Link pending uploads to a saved entry. Only rows owned by this employee and
+ * still unlinked are touched — ids belonging to other employees or already
+ * linked elsewhere are silently ignored.
+ */
+async function linkAttachments(employeeId: string, entryId: string, attachmentIds?: string[]) {
+  const ids = (attachmentIds ?? []).filter(Boolean).slice(0, 20);
+  if (!ids.length) return;
+  await db
+    .update(timeEntryAttachments)
+    .set({ entryId, updatedAt: new Date() })
+    .where(
+      and(
+        inArray(timeEntryAttachments.id, ids),
+        eq(timeEntryAttachments.employeeId, employeeId),
+        isNull(timeEntryAttachments.entryId)
+      )
+    );
 }
 
 function minutesBetween(startAt: string, endAt: string): number {
@@ -1086,6 +1109,7 @@ export async function addWorkEntryAction(
     }
     throw e;
   }
+  await linkAttachments(employeeId, input.id, input.attachmentIds);
   await audit(membership, "entry.create", "time_entry", input.id, null, {
     employeeId,
     taskId,
@@ -1223,6 +1247,7 @@ export async function editWorkEntryAction(
     }
     throw e;
   }
+  await linkAttachments(employeeId, entryId, input.attachmentIds);
   await audit(
     membership,
     "entry.update",
@@ -1558,6 +1583,7 @@ export async function updateBreakAction(
         progressUpdates: [],
         entries: [],
         breaks: asBreaks,
+        attachments: [],
         statusHistory: [],
       },
       employeeId,

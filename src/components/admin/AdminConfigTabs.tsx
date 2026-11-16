@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Building2, MailPlus, UserCog, Users, Zap } from "lucide-react";
+import Link from "next/link";
+import { Building2, MailPlus, MessageSquareWarning, UserCog, Users, Zap } from "lucide-react";
 import { TeamsAdmin } from "./TeamsAdmin";
 import { ClientReportingAdmin } from "./ClientReportingAdmin";
 import { InvitationsAdmin } from "./InvitationsAdmin";
@@ -16,7 +17,7 @@ const SECTIONS: { id: AdminSection; label: string; icon: typeof Users }[] = [
   { id: "users", label: "Users", icon: UserCog },
 ];
 
-/** Configuration home: teams/projects and client-site reporting in one place. */
+/** Configuration home: teams/projects, client-site reporting, and admin workflows. */
 export function AdminConfigTabs() {
   const [section, setSection] = useState<AdminSection>("teams");
 
@@ -47,6 +48,13 @@ export function AdminConfigTabs() {
                 </button>
               );
             })}
+            <Link
+              href="/admin/complaints"
+              className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl px-3.5 text-sm font-semibold text-[#4A4665] transition hover:bg-[#F7F7FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+            >
+              <MessageSquareWarning size={15} aria-hidden="true" />
+              Complaints
+            </Link>
           </nav>
         </div>
       </div>

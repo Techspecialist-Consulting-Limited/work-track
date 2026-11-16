@@ -485,6 +485,7 @@ export function buildSeedDatabase(): WorkLogDatabase {
     progressUpdates,
     entries,
     breaks,
+    attachments: [],
     statusHistory,
   };
 }

@@ -18,6 +18,7 @@ import {
   teamProjects,
   teams,
   timeEntries,
+  timeEntryAttachments,
 } from "./schema";
 import type {
   BreakEntry,
@@ -69,11 +70,12 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     progressUpdates: [],
     entries: [],
     breaks: [],
+    attachments: [],
     statusHistory: [],
   };
   if (employeeIds.length === 0) return empty;
 
-  const [categoryRows, membershipRows, taskRows, entryRows, teamRows, employeeTeamRows, organisationRows] =
+  const [categoryRows, membershipRows, taskRows, entryRows, teamRows, employeeTeamRows, organisationRows, attachmentRows] =
     await Promise.all([
       db.select().from(taskCategories).where(eq(taskCategories.isActive, true)).orderBy(asc(taskCategories.name)),
       db
@@ -89,6 +91,11 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
       db.select().from(teams).orderBy(asc(teams.name)),
       db.select().from(employeeTeams).where(inArray(employeeTeams.employeeId, employeeIds)),
       db.select().from(organisations).orderBy(asc(organisations.name)),
+      db
+        .select()
+        .from(timeEntryAttachments)
+        .where(inArray(timeEntryAttachments.employeeId, employeeIds))
+        .orderBy(asc(timeEntryAttachments.createdAt)),
     ]);
 
   const employeeNames = new Map(employeeRows.map((row) => [row.id, row.fullName]));
@@ -492,6 +499,15 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     progressUpdates: mappedProgress,
     entries: workEntries,
     breaks,
+    attachments: attachmentRows.map((row) => ({
+      id: row.id,
+      entryId: row.entryId,
+      employeeId: row.employeeId,
+      fileName: row.fileName,
+      mimeType: row.mimeType,
+      sizeBytes: row.sizeBytes,
+      createdAt: row.createdAt.toISOString(),
+    })),
     statusHistory,
   };
 }

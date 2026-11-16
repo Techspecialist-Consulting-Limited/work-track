@@ -194,6 +194,7 @@ function database(): WorkLogDatabase {
         createdAt: `${DAY}T12:00:00+01:00`,
       } satisfies BreakEntry,
     ],
+    attachments: [],
     statusHistory: [],
   };
 }
