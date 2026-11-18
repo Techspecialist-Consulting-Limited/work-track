@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { AuthzError, getRequestMembership } from "@/lib/auth/authorize";
 import { db } from "@/lib/db";
 import { complaintMessageAttachments, complaints } from "@/lib/db/schema";
@@ -27,7 +27,7 @@ export async function GET(request: Request, { params }: Params) {
       })
       .from(complaintMessageAttachments)
       .innerJoin(complaints, eq(complaintMessageAttachments.complaintId, complaints.id))
-      .where(eq(complaintMessageAttachments.id, id))
+      .where(and(eq(complaintMessageAttachments.id, id), isNull(complaints.withdrawnAt)))
       .limit(1);
 
     if (!row) return NextResponse.json({ ok: false, message: "Attachment not found." }, { status: 404 });

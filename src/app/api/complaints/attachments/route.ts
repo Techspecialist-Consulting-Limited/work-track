@@ -30,7 +30,8 @@ export async function POST(request: Request) {
     if (!complaint) return NextResponse.json({ ok: false, message: "Complaint not found." }, { status: 404 });
 
     const canManage = await canManageComplaintsMembership(membership);
-    if (!canManage) {
+    const isOwner = membership.role === "staff" && membership.employeeId === complaint.employeeId;
+    if (!canManage && !isOwner) {
       return NextResponse.json({ ok: false, message: "Not allowed." }, { status: 403 });
     }
 
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
         id,
         complaintId,
         messageId: null,
-        employeeId: null,
+        employeeId: isOwner ? membership.employeeId : null,
         fileName: sanitizeFileName(file.name),
         mimeType: check.mimeType!,
         sizeBytes: bytes.byteLength,

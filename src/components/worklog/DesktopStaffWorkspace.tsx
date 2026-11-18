@@ -18,6 +18,7 @@ import { WorkTrackSelect } from "@/components/WorkTrackSelect";
 import { WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { WORK_LOCATION_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
 import { formatDateLabel, formatMinutes } from "@/lib/worklog/time";
+import { dateKeyAfter } from "./shared";
 import type { WorkLocation } from "@/lib/worklog/types";
 import { ProfileMenu } from "./ProfileMenu";
 import { BreakStatus } from "./BreakStatus";
@@ -38,6 +39,7 @@ const OVERTIME_SLOT = "__overtime";
 export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
   const {
     now,
+    todayKey,
     summary,
     slots,
     nextAvailableSlot,
@@ -100,7 +102,13 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     effectiveDateKey,
     workdayStatus,
     isHistoricalEdit,
-    resetForm,
+    entryDateKey,
+    setEntryDateKey,
+    copyingDay,
+    handleCopyDay,
+    showUnloggedNotice,
+    dismissUnloggedNotice,
+    cancelForm,
     selectSlot,
     submitEntry,
     handleStartBreak,
@@ -128,12 +136,14 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
       value: slot.key,
       label: slot.label,
       description: !slot.available
-        ? "Already recorded"
-        : slot.current
-          ? "Current hour"
-          : nextAvailableSlot?.key === slot.key
-            ? "Next available"
-            : undefined,
+        ? "Break time"
+        : slot.recorded
+          ? "Already recorded — add another"
+          : slot.current
+            ? "Current hour"
+            : nextAvailableSlot?.key === slot.key
+              ? "Next available"
+              : undefined,
       disabled: !slot.available || Boolean(activeBreak),
     })),
     { value: OVERTIME_SLOT, label: "Overtime", description: "Set start and end manually" },
@@ -150,6 +160,14 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     }
     const slot = slots.find((candidate) => candidate.key === value);
     if (slot) selectSlot(slot);
+  };
+
+  const changeEntryDate = (value: string) => {
+    if (!value) return;
+    setEntryDateKey(value);
+    setSelectedSlot("");
+    setShowTimeAdjustment(false);
+    setError(null);
   };
 
   const activityOptions = [
@@ -202,11 +220,40 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               name={employee?.name ?? "Employee"}
               role={employee ? `${employee.role} · ${employee.department}` : "Staff"}
               avatarUrl={employee?.avatarUrl}
+              jobTitle={employee?.role}
+              department={employee?.department}
               editable
               required={Boolean(employee && !employee.avatarUrl)}
             />
           </div>
         </header>
+
+        <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-[#E7E6F0] bg-white px-3 py-2 shadow-sm">
+          <label className="flex items-center gap-2 text-[11px] font-semibold text-[#53506B]">
+            <CalendarDays size={14} aria-hidden="true" className="text-[#6C45F5]" />
+            Logging date
+            <input
+              type="date"
+              value={entryDateKey}
+              max={todayKey}
+              disabled={Boolean(activeBreak)}
+              onChange={(event) => changeEntryDate(event.target.value)}
+              className="min-h-8 rounded-lg border border-[#E7E6F0] bg-white px-2 text-xs text-[#17172F] outline-none focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15 disabled:opacity-50"
+            />
+          </label>
+          <div className="flex items-center gap-2">
+            {entryDateKey !== todayKey ? (
+              <button
+                type="button"
+                disabled={copyingDay || Boolean(activeBreak)}
+                onClick={() => void handleCopyDay(dateKeyAfter(entryDateKey, -1), entryDateKey)}
+                className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#FBFAFF] disabled:opacity-50"
+              >
+                {copyingDay ? "Copying…" : "Copy previous day"}
+              </button>
+            ) : null}
+          </div>
+        </div>
 
         <section
           ref={formRef}
@@ -222,7 +269,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                 {editingId ? (
                   <button
                     type="button"
-                    onClick={resetForm}
+                    onClick={cancelForm}
                     className="min-h-8 rounded-lg px-2 text-xs font-semibold text-[#6C45F5] hover:bg-[#F5F1FF]"
                   >
                     Cancel
@@ -231,7 +278,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               </div>
               <p className="mt-0.5 text-[11px] text-[#777A91] sm:text-xs">
                 {isHistoricalEdit
-                  ? `Editing a record from ${formatDateLabel(effectiveDateKey)}.`
+                  ? `${editingId ? "Editing" : "Logging"} work for ${formatDateLabel(effectiveDateKey)}.`
                   : "Record what you worked on today."}
               </p>
             </div>
@@ -302,7 +349,26 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                     <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[#D0D0DF]" />
                     Remaining ({formatMinutes(remainingMinutes)})
                   </span>
+                  {summary.overtimeMinutes > 0 ? (
+                    <span className="inline-flex items-center gap-1 font-semibold text-[#7C3AED]">
+                      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[#7C3AED]" />
+                      Overtime ({formatMinutes(summary.overtimeMinutes)})
+                    </span>
+                  ) : null}
                 </div>
+                {summary.overtimeMinutes > 0 ? (
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="text-[9px] font-semibold text-[#7C3AED] sm:text-[10px]">
+                      + {formatMinutes(summary.overtimeMinutes)} beyond the shift
+                    </span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#ECEBF2]">
+                      <span
+                        className="block h-full rounded-full bg-[#7C3AED]"
+                        style={{ width: `${Math.min(100, (summary.overtimeMinutes / SCHEDULED_MINUTES) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           </section>
@@ -696,6 +762,21 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
               This edit changes only the selected historical entry. It will not change today’s logging date or the
               task’s current status.
             </p>
+          ) : null}
+          {showUnloggedNotice ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#FFF8E8] px-3 py-2 text-xs text-[#8A5A00]">
+              <span>
+                You have <strong>{formatMinutes(summary.notLoggedMinutes)}</strong> of unlogged time so far today. Log it
+                now so your workday is complete.
+              </span>
+              <button
+                type="button"
+                onClick={dismissUnloggedNotice}
+                className="min-h-7 rounded-lg px-2 text-[11px] font-semibold text-[#8A5A00] hover:bg-[#FFEFCE]"
+              >
+                Dismiss
+              </button>
+            </div>
           ) : null}
           {error ? (
             <p role="alert" className="rounded-xl bg-[#FDEEEE] px-3 py-2.5 text-sm text-[#B43A3A]">

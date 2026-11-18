@@ -40,10 +40,53 @@ export interface TokenVerifierOptions {
   requiredScope: string;
 }
 
+export type BearerFailureCategory =
+  | "malformed"
+  | "signature"
+  | "issuer"
+  | "audience"
+  | "expiry"
+  | "tenant"
+  | "scope"
+  | "client_id"
+  | "claims";
+
 export class EntraTokenError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public category: BearerFailureCategory = "malformed"
+  ) {
     super(message);
     this.name = "EntraTokenError";
+  }
+}
+
+/** Dev-safe structured log for bearer-token failures — never logs token material. */
+function logBearerFailure(category: BearerFailureCategory, detail: string) {
+  console.warn(`[auth:bearer] ${category}: ${detail}`);
+}
+
+/** Maps a jose JWT verification failure to a diagnostic category. */
+function categorizeJwtError(e: unknown): { category: BearerFailureCategory; detail: string } {
+  const code = (e as { code?: string })?.code;
+  const claim = (e as { claim?: string })?.claim;
+  const message = e instanceof Error ? e.message : String(e);
+  switch (code) {
+    case "ERR_JWT_EXPIRED":
+      return { category: "expiry", detail: `token expired${claim ? ` (claim ${claim})` : ""}` };
+    case "ERR_JWT_CLAIM_VALIDATION_FAILED":
+      if (claim === "aud") return { category: "audience", detail: "audience mismatch" };
+      if (claim === "iss") return { category: "issuer", detail: "issuer mismatch" };
+      if (claim === "iat" || claim === "nbf") return { category: "expiry", detail: `time claim invalid (${claim})` };
+      return { category: "claims", detail: `claim validation failed (${claim ?? "unknown"})` };
+    case "ERR_JWS_SIGNATURE_VERIFICATION_FAILED":
+      return { category: "signature", detail: "signature verification failed" };
+    case "ERR_JWS_INVALID":
+      return { category: "malformed", detail: "malformed JWS" };
+    case "ERR_JWT_INVALID":
+      return { category: "malformed", detail: "invalid JWT structure" };
+    default:
+      return { category: "signature", detail: message.slice(0, 160) };
   }
 }
 
@@ -79,26 +122,35 @@ export async function verifyEntraAccessToken(
     payload = result.payload;
   } catch (e) {
     if (e instanceof EntraTokenError) throw e;
+    const { category, detail } = categorizeJwtError(e);
+    logBearerFailure(category, detail);
     throw new EntraTokenError(
-      e instanceof Error ? `Invalid token: ${e.message}` : "Invalid token."
+      e instanceof Error ? `Invalid token: ${e.message}` : "Invalid token.",
+      category
     );
   }
 
   const tid = claimString(payload, "tid");
   const oid = claimString(payload, "oid");
-  if (!tid || !oid) throw new EntraTokenError("Token is missing tenant or object id claims.");
+  if (!tid || !oid) {
+    logBearerFailure("claims", "missing tid or oid claim");
+    throw new EntraTokenError("Token is missing tenant or object id claims.", "claims");
+  }
   if (tid !== options.tenantId) {
-    throw new EntraTokenError("Token was issued for a different tenant.");
+    logBearerFailure("tenant", `tid ${tid} != configured tenant`);
+    throw new EntraTokenError("Token was issued for a different tenant.", "tenant");
   }
 
   if (!hasScope(payload, options.requiredScope)) {
-    throw new EntraTokenError("Token is missing the required WorkTrack API scope.");
+    logBearerFailure("scope", `scp=${claimString(payload, "scp") ?? "none"} roles=${JSON.stringify(payload["roles"] ?? null)} missing ${options.requiredScope}`);
+    throw new EntraTokenError("Token is missing the required WorkTrack API scope.", "scope");
   }
 
   if (options.allowedClientIds && options.allowedClientIds.length > 0) {
     const azp = claimString(payload, "azp") ?? claimString(payload, "appid");
     if (!azp || !options.allowedClientIds.includes(azp)) {
-      throw new EntraTokenError("Token was issued to an unexpected client application.");
+      logBearerFailure("client_id", `azp=${azp ?? "none"} not in allowed clients`);
+      throw new EntraTokenError("Token was issued to an unexpected client application.", "client_id");
     }
   }
 

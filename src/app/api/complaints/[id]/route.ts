@@ -8,6 +8,7 @@ import {
   getComplaintRecords,
   markComplaintRead,
   setComplaintStatus,
+  withdrawComplaint,
   type ComplaintActor,
 } from "@/lib/complaints/server";
 import type { ComplaintStatus } from "@/lib/complaints/types";
@@ -74,13 +75,14 @@ export async function POST(request: Request, { params }: Params) {
     if (!access.ok) return NextResponse.json({ ok: false, message: access.message }, { status: access.status });
 
     const body = (await request.json().catch(() => ({}))) as {
-      type?: "reply" | "setStatus" | "markRead";
+      type?: "reply" | "setStatus" | "markRead" | "reopen" | "withdraw";
       body?: string;
       attachmentIds?: string[];
       requestInfo?: boolean;
       toStatus?: ComplaintStatus;
       note?: string;
       resolutionBody?: string;
+      reason?: string;
     };
 
     if (body.type === "markRead") {
@@ -112,6 +114,46 @@ export async function POST(request: Request, { params }: Params) {
         note: body.note,
         resolutionBody: body.resolutionBody,
       });
+      if (!result.ok) return NextResponse.json(result, { status: 400 });
+      return NextResponse.json(result);
+    }
+
+    if (body.type === "reopen") {
+      if (access.mode !== "staff") {
+        return NextResponse.json({ ok: false, message: "Only the employee who raised this complaint can reopen it." }, { status: 403 });
+      }
+      if (access.row.status !== "resolved") {
+        return NextResponse.json({ ok: false, message: "Only resolved complaints can be reopened." }, { status: 409 });
+      }
+      const reason = (body.reason ?? "").trim();
+      if (reason.length < 5) {
+        return NextResponse.json({ ok: false, message: "Tell us why you are reopening this complaint." }, { status: 400 });
+      }
+      const actor = actorFromMembership(membership);
+      const reply = await addComplaintReply({
+        complaintId: id,
+        actor,
+        senderType: "staff",
+        body: `Reopening this complaint: ${reason}`,
+        attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds : [],
+      });
+      if (!reply.ok) return NextResponse.json(reply, { status: 400 });
+      const result = await setComplaintStatus({
+        complaintId: id,
+        actor,
+        toStatus: "reopened",
+        note: reason,
+        actorSide: "staff",
+      });
+      if (!result.ok) return NextResponse.json(result, { status: 400 });
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.type === "withdraw") {
+      if (access.mode !== "staff") {
+        return NextResponse.json({ ok: false, message: "Only the employee who raised this complaint can withdraw it." }, { status: 403 });
+      }
+      const result = await withdrawComplaint({ complaintId: id, actor: actorFromMembership(membership) });
       if (!result.ok) return NextResponse.json(result, { status: 400 });
       return NextResponse.json(result);
     }

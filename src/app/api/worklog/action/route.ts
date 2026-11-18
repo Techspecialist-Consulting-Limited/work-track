@@ -4,7 +4,9 @@ import { AuthzError, getRequestMembership } from "@/lib/auth/authorize";
 import {
   addProgressUpdateAction,
   addWorkEntryAction,
+  archiveTaskAction,
   archiveTeamProjectAction,
+  copyEntriesToDayAction,
   assignEmployeeClientAction,
   assignEmployeeTeamAction,
   createClientCategoryAction,
@@ -80,6 +82,12 @@ export async function POST(request: Request) {
         break;
       case "updateTask":
         result = await updateTaskAction(membership, p as never);
+        break;
+      case "archiveTask":
+        result = await archiveTaskAction(membership, p as never);
+        break;
+      case "copyEntriesToDay":
+        result = await copyEntriesToDayAction(membership, p as never);
         break;
       case "updateTaskStatus":
         result = await updateTaskStatusAction(

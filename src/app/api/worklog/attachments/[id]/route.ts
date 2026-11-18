@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { AuthzError, getRequestMembership } from "@/lib/auth/authorize";
 import { db } from "@/lib/db";
-import { timeEntryAttachments } from "@/lib/db/schema";
+import { timeEntries, timeEntryAttachments } from "@/lib/db/schema";
 import { createSignedUrl, deleteAttachmentObject, getStorageConfig } from "@/lib/worklog/attachments";
 
 
@@ -50,7 +50,7 @@ export async function GET(request: Request, { params }: Params) {
   }
 }
 
-/** Remove a pending (not-yet-linked) upload. Linked attachments are immutable. */
+/** Remove a pending upload, or detach/delete an attachment from the staff member's own saved entry. */
 export async function DELETE(request: Request, { params }: Params) {
   await connection();
   try {
@@ -65,7 +65,14 @@ export async function DELETE(request: Request, { params }: Params) {
       return NextResponse.json({ ok: false, message: "Attachment not found." }, { status: 404 });
     }
     if (row.entryId) {
-      return NextResponse.json({ ok: false, message: "Saved attachments cannot be removed here." }, { status: 409 });
+      // A saved attachment may be removed by its owner. Verify the parent
+      // entry really belongs to them before touching it.
+      const [entry] = await db
+        .select({ id: timeEntries.id })
+        .from(timeEntries)
+        .where(eq(timeEntries.id, row.entryId))
+        .limit(1);
+      if (!entry) return NextResponse.json({ ok: false, message: "Attachment not found." }, { status: 404 });
     }
     await db.delete(timeEntryAttachments).where(eq(timeEntryAttachments.id, id));
     const config = getStorageConfig();

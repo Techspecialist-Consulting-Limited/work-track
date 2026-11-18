@@ -8,7 +8,9 @@ import {
   validateReason,
   validateSubtaskTitle,
   validateTaskTitle,
+  validateEntryTimes,
 } from "../src/lib/worklog/validation";
+import { makeWorkSlots } from "../src/components/worklog/shared";
 import type {
   BreakEntry,
   Task,
@@ -136,4 +138,39 @@ test("breaks are excluded from productive work totals", () => {
   assert.equal(summary.breakMinutes, 60);
   assert.equal(summary.entries.length, 1);
   assert.equal(summary.breaks.length, 1);
+});
+
+test("work entries can share a time slot, but breaks still block it", () => {
+  const existing = entry("e1", "a", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00", 60);
+  const workOnly = database({ tasks: [task("a", "ongoing")], entries: [existing] });
+  assert.equal(validateEntryTimes(workOnly, "emp-1", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00").ok, true);
+
+  const breakRow: BreakEntry = {
+    id: "brk-overlap",
+    employeeId: "emp-1",
+    startAt: "2026-11-06T09:30:00+01:00",
+    endAt: "2026-11-06T09:45:00+01:00",
+    createdAt: "2026-11-06T09:30:00+01:00",
+  };
+  const withBreak = database({ entries: [existing], breaks: [breakRow] });
+  assert.equal(validateEntryTimes(withBreak, "emp-1", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00").ok, false);
+});
+
+test("recorded work slots stay selectable while break slots remain blocked", () => {
+  const now = new Date("2026-11-06T09:30:00+01:00");
+  const work = [entry("e1", "a", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00", 60)];
+  const workSlots = makeWorkSlots("2026-11-06", work, [], now);
+  const nine = workSlots.find((slot) => slot.key === "540-600");
+  assert.equal(nine?.recorded, true);
+  assert.equal(nine?.available, true);
+
+  const breakRow: BreakEntry = {
+    id: "brk-slot",
+    employeeId: "emp-1",
+    startAt: "2026-11-06T09:30:00+01:00",
+    endAt: "2026-11-06T09:45:00+01:00",
+    createdAt: "2026-11-06T09:30:00+01:00",
+  };
+  const breakSlots = makeWorkSlots("2026-11-06", [], [breakRow], now);
+  assert.equal(breakSlots.find((slot) => slot.key === "540-600")?.available, false);
 });

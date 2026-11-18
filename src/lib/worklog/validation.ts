@@ -12,25 +12,20 @@ function overlaps(startA: number, endA: number, startB: number, endB: number) {
   return startA < endB && startB < endA;
 }
 
+/**
+ * Work entries may share a time slot — staff can log another record for the
+ * same hour. Breaks stay exclusive, so work still cannot overlap a break.
+ */
 export function validateEntryTimes(
   db: WorkLogDatabase,
   employeeId: EmployeeId,
   startAt: string,
-  endAt: string,
-  ignoreEntryId?: string
+  endAt: string
 ): ValidationResult {
   const start = new Date(startAt).getTime();
   const end = new Date(endAt).getTime();
   if (Number.isNaN(start) || Number.isNaN(end)) return fail("Enter a valid start and end time.");
   if (end <= start) return fail("End time must be after start time.");
-
-  const clash = db.entries.find(
-    (entry) =>
-      entry.employeeId === employeeId &&
-      entry.id !== ignoreEntryId &&
-      overlaps(start, end, new Date(entry.startAt).getTime(), new Date(entry.endAt).getTime())
-  );
-  if (clash) return fail("This time overlaps another work entry. Choose a different time.");
 
   const breakClash = db.breaks.find(
     (brk) =>

@@ -169,10 +169,12 @@ export function getSessionActiveTeamId(): string | null {
   return sessionActiveTeamId;
 }
 
-/** Saves the staff member's own profile (name/photo). Resolves with the server result. */
+/** Saves the staff member's own profile (name/photo/job title/department). */
 export async function saveProfile(input: {
   fullName?: string;
   avatarUrl?: string | null;
+  jobTitle?: string;
+  department?: string;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
     const res = await fetch("/api/worklog/action", {
@@ -224,6 +226,8 @@ interface SyncResponse {
   organisationId?: string;
   clientCategoryId?: string;
   clientSubcategoryId?: string;
+  copied?: number;
+  skipped?: number;
 }
 
 async function syncAction(action: string, payload: Record<string, unknown>): Promise<SyncResponse | null> {
@@ -294,12 +298,12 @@ function splitFor(input: Pick<EntryInput, "startAt" | "endAt" | "isReportedOvert
     : splitIntervalMinutes(input.startAt, input.endAt);
 }
 
-function checkEntryInput(db: WorkLogDatabase, input: EntryInput, ignoreId?: string): ValidationResult {
+function checkEntryInput(db: WorkLogDatabase, input: EntryInput): ValidationResult {
   const description = validateDescription(input.description);
   if (!description.ok) return description;
   const link = validateEvidenceLink(input.evidenceLink);
   if (!link.ok) return link;
-  return validateEntryTimes(db, input.employeeId, input.startAt, input.endAt, ignoreId);
+  return validateEntryTimes(db, input.employeeId, input.startAt, input.endAt);
 }
 
 function subtaskBelongsTo(db: WorkLogDatabase, taskId: string, subtaskId?: string | null): ValidationResult {
@@ -403,7 +407,7 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
   const db = getDatabaseSnapshot();
   const existing = db.entries.find((e) => e.id === entryId);
   if (!existing) return { ok: false, message: "This entry no longer exists." };
-  const check = checkEntryInput(db, input, entryId);
+  const check = checkEntryInput(db, input);
   if (!check.ok) return check;
   const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
   const wasClientEntry = Boolean(existing.clientCategoryId || existing.clientSubcategoryId);
@@ -565,6 +569,8 @@ export function updateTask(input: {
   title: string;
   description?: string;
   categoryId?: string | null;
+  teamId?: string | null;
+  projectId?: string | null;
 }): MutationResult {
   const check = validateTaskTitle(input.title);
   if (!check.ok) return check;
@@ -572,6 +578,8 @@ export function updateTask(input: {
   const task = db.tasks.find((t) => t.id === input.taskId);
   if (!task) return { ok: false, message: "Task not found." };
   const categoryId = input.categoryId?.trim() || undefined;
+  const teamId = (input.teamId !== undefined ? input.teamId : task.teamId) ?? undefined;
+  const projectId = (input.projectId !== undefined ? input.projectId : task.projectId) ?? undefined;
   emit({
     ...db,
     tasks: db.tasks.map((t) =>
@@ -584,6 +592,8 @@ export function updateTask(input: {
             categoryName: categoryId
               ? db.categories.find((category) => category.id === categoryId)?.name
               : undefined,
+            teamId,
+            projectId,
             updatedAt: new Date().toISOString(),
           }
         : t
@@ -591,6 +601,28 @@ export function updateTask(input: {
   });
   void syncAction("updateTask", { ...input, categoryId: categoryId ?? null });
   return { ok: true };
+}
+
+/** Archive or restore one of the staff member's own tasks. */
+export function archiveTask(taskId: string, archived: boolean): MutationResult {
+  const db = getDatabaseSnapshot();
+  const task = db.tasks.find((t) => t.id === taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  emit({
+    ...db,
+    tasks: db.tasks.map((t) =>
+      t.id === taskId
+        ? { ...t, archivedAt: archived ? new Date().toISOString() : undefined, updatedAt: new Date().toISOString() }
+        : t
+    ),
+  });
+  void syncAction("archiveTask", { taskId, archived });
+  return { ok: true };
+}
+
+/** Copy one day's entries/breaks to another day (skips busy slots). */
+export function copyEntriesToDay(fromDateKey: string, toDateKey: string): Promise<SyncResponse | null> {
+  return syncAction("copyEntriesToDay", { fromDateKey, toDateKey });
 }
 
 export function updateTaskStatus(
