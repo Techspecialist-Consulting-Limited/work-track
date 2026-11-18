@@ -32,7 +32,10 @@ export interface TokenVerifierOptions {
   /** JWKS resolver — injectable for tests. */
   jwks: JWTVerifyGetKey;
   issuer: string;
-  audience: string;
+  /** Accepted `aud` values. Entra emits the bare appId GUID for scopes a
+   *  client requests on its own registration, and the `api://` URI form
+   *  otherwise — both denote the same app, so both are accepted. */
+  audience: string | string[];
   tenantId: string;
   /** When set, the token's `azp`/`appid` must match one of these client ids. */
   allowedClientIds?: string[];
@@ -181,10 +184,16 @@ function verifierOptionsFromEnv(): TokenVerifierOptions {
     remoteJwksCache.set(tenantId, jwks);
   }
   const clientId = process.env.ENTRA_MOBILE_CLIENT_ID;
+  // Accept both `api://<app-id>` and bare `<app-id>` audience forms — Entra
+  // issues the GUID form when a client requests a scope on its own app
+  // registration (the mobile app shares the web registration).
+  const audiences = audience.startsWith("api://")
+    ? [audience, audience.slice("api://".length)]
+    : [audience];
   return {
     jwks,
     issuer: `https://login.microsoftonline.com/${tenantId}/v2.0`,
-    audience,
+    audience: audiences,
     tenantId,
     allowedClientIds: clientId ? [clientId] : undefined,
     requiredScope,
