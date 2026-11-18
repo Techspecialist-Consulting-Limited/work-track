@@ -5,14 +5,6 @@ export type ComplaintStatus =
   | "resolved"
   | "reopened";
 
-export type ComplaintCategory =
-  | "payroll"
-  | "workplace"
-  | "scheduling"
-  | "equipment"
-  | "policy"
-  | "other";
-
 export type ComplaintSenderType = "staff" | "management" | "system";
 
 export interface ComplaintAttachment {
@@ -66,7 +58,6 @@ export interface ComplaintRecord {
   id: string;
   reference: string;
   employee: ComplaintEmployee;
-  category: ComplaintCategory;
   subject: string;
   description: string;
   submittedAt: string;
@@ -85,15 +76,6 @@ export const COMPLAINT_STATUS_LABELS: Record<ComplaintStatus, string> = {
   awaiting_staff: "Awaiting Staff",
   resolved: "Resolved",
   reopened: "Reopened",
-};
-
-export const COMPLAINT_CATEGORY_LABELS: Record<ComplaintCategory, string> = {
-  payroll: "Payroll",
-  workplace: "Workplace",
-  scheduling: "Scheduling",
-  equipment: "Equipment",
-  policy: "Policy",
-  other: "Other",
 };
 
 export const COMPLAINT_STATUS_ORDER: ComplaintStatus[] = [

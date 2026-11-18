@@ -28,7 +28,7 @@ Next.js 16 (App Router, `cacheComponents` + partial prerendering), React 19, Tai
 
 - `cacheComponents` is on: no `export const dynamic`; dynamic pages need `await connection()` inside a `<Suspense>` boundary (see existing page pattern).
 - Do not run `next build` while `next dev` is running — they share `.next` and cause EPERM rename errors on Windows.
-- Entries/breaks are hourly-aligned per `WORKTRACK_SCHEDULE`; the DB enforces non-overlap via a `tstzrange` exclusion constraint (`btree_gist`).
+- Entries/breaks are hourly-aligned per `WORKTRACK_SCHEDULE`. Work entries may share a time slot (migration `0017`); only breaks are non-overlapping via the `time_entries_breaks_no_overlap` `tstzrange` exclusion constraint (`btree_gist`).
 - `postgres` v4 pipelines statements by default; the Supabase transaction pooler hangs when several are in flight. Keep `max_pipeline: 1` in `src/lib/db/index.ts`, `scripts/migrate.mjs` and `scripts/seed.mts`.
 
 ## Evidence attachments
@@ -45,3 +45,13 @@ Next.js 16 (App Router, `cacheComponents` + partial prerendering), React 19, Tai
 - APIs: `GET|POST /api/complaints`, `GET|POST /api/complaints/[id]`, `POST /api/complaints/attachments`, `GET|DELETE /api/complaints/attachments/[id]`. Reply/status mutations insert both the visible message and a `complaint_status_history` row; resolving requires a resolution response.
 - Complaint attachments reuse the private `worktrack-evidence` bucket under `complaints/<complaintId>/…`, with metadata in `complaint_message_attachments`. Uploads are pending (`message_id NULL`) until linked by the reply/create call; abandoned rows are reaped after 24 h. Downloads are authorised 302 redirects to 120 s signed URLs.
 - Mobile: `mobile/worktrack_staff/` is a Flutter prototype. It defaults to mock data. Connected mode (same backend/API as web) is enabled with `--dart-define=WORKTRACK_API_BASE_URL=… --dart-define=WORKTRACK_ACCESS_TOKEN=… --dart-define=WORKTRACK_ROLE=staff`; the token is the existing Entra bearer token resolved by `getRequestMembership`.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

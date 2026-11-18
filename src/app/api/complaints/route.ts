@@ -97,7 +97,6 @@ export async function POST(request: Request) {
       files = form.getAll("files").filter((entry): entry is File => entry instanceof File);
     } else {
       const body = (await request.json().catch(() => ({}))) as {
-        category?: string;
         subject?: string;
         description?: string;
         attachmentIds?: string[];
@@ -107,11 +106,30 @@ export async function POST(request: Request) {
       attachmentIds = Array.isArray(body.attachmentIds) ? body.attachmentIds : [];
     }
 
-    const category = "other";
+    // Fail before creating anything if attachments were requested but storage
+    // is unavailable — a complaint with silently missing evidence is worse
+    // than a clear "try again" error.
+    const config = files.length ? getStorageConfig() : null;
+    if (files.length && !config) {
+      return NextResponse.json(
+        { ok: false, message: "Attachment storage is not configured. Remove the files or contact an administrator." },
+        { status: 503 }
+      );
+    }
+
+    // Validate every file up front so obviously invalid files never produce a
+    // half-saved complaint either.
+    const prepared: { bytes: ArrayBuffer; name: string; mimeType: string }[] = [];
+    for (const file of files.slice(0, 10)) {
+      const bytes = await file.arrayBuffer();
+      const check = validateAttachmentFile(file.name, file.type, bytes.byteLength);
+      if (check.ok && check.mimeType) {
+        prepared.push({ bytes, name: file.name, mimeType: check.mimeType });
+      }
+    }
 
     const result = await createComplaintRecord({
       employeeId: membership.employeeId,
-      category: category as "payroll" | "workplace" | "scheduling" | "equipment" | "policy" | "other",
       subject,
       description,
       attachmentIds,
@@ -122,23 +140,16 @@ export async function POST(request: Request) {
 
     // Multipart submissions may carry files — store them against the opening
     // message so they appear with the complaint in the admin view.
-    if (files.length) {
-      const config = getStorageConfig();
-      if (!config) {
-        return NextResponse.json(
-          { ok: false, message: "Complaint submitted, but attachment storage is not configured." },
-          { status: 503 }
-        );
-      }
-      for (const file of files.slice(0, 10)) {
-        const bytes = await file.arrayBuffer();
-        const check = validateAttachmentFile(file.name, file.type, bytes.byteLength);
-        if (!check.ok) continue; // skip invalid files; complaint itself is saved
+    let uploadWarning: string | null = null;
+    if (config) {
+      let skipped = 0;
+      for (const file of prepared) {
         const id = randomUUID();
         const storagePath = complaintStoragePath(result.complaintId, id, file.name);
         try {
-          await uploadAttachmentObject(config, storagePath, bytes, check.mimeType!);
+          await uploadAttachmentObject(config, storagePath, file.bytes, file.mimeType);
         } catch {
+          skipped += 1;
           continue;
         }
         await db.insert(complaintMessageAttachments).values({
@@ -147,15 +158,16 @@ export async function POST(request: Request) {
           messageId: result.messageId,
           employeeId: membership.employeeId,
           fileName: sanitizeFileName(file.name),
-          mimeType: check.mimeType!,
-          sizeBytes: bytes.byteLength,
+          mimeType: file.mimeType,
+          sizeBytes: file.bytes.byteLength,
           storagePath,
           uploadedByMembershipId: membership.membershipId,
         });
       }
+      if (skipped) uploadWarning = `${skipped} attachment${skipped === 1 ? "" : "s"} could not be uploaded.`;
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, ...(uploadWarning ? { warning: uploadWarning } : {}) });
   } catch (error) {
     if (error instanceof AuthzError) {
       return NextResponse.json({ ok: false, message: error.message }, { status: error.status });

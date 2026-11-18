@@ -161,10 +161,11 @@ export function EvidenceAttachments({ items, onFiles, onRemove, onInvalid, disab
               {item.status === "uploading" ? (
                 <Loader2 size={15} className="shrink-0 animate-spin text-[#8B7BE8]" aria-label="Uploading" />
               ) : null}
-              {!item.linked && item.status !== "uploading" ? (
+              {item.status !== "uploading" ? (
                 <button
                   type="button"
-                  aria-label={`Remove ${item.fileName}`}
+                  aria-label={`${item.linked ? "Remove saved attachment" : "Remove"} ${item.fileName}`}
+                  title={item.linked ? "Remove this attachment from the saved entry" : undefined}
                   onClick={() => onRemove(item.key)}
                   className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#9A97AD] hover:bg-[#FDEEEE] hover:text-[#B43A3A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
                 >

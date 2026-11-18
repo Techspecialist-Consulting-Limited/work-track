@@ -18,6 +18,7 @@ export function ViewportDebug() {
   const [stats, setStats] = useState<ViewportStats | null>(null);
 
   useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
     if (!new URLSearchParams(window.location.search).has("viewport-debug")) return;
 
     const update = () => {

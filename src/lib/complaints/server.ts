@@ -12,7 +12,6 @@ import {
 } from "@/lib/db/schema";
 import type {
   ComplaintAttachment,
-  ComplaintCategory,
   ComplaintEmployee,
   ComplaintMessage,
   ComplaintRecord,
@@ -66,7 +65,6 @@ export async function canManageComplaintsMembership(m: {
 
 export async function createComplaintRecord(input: {
   employeeId: string;
-  category: ComplaintCategory;
   subject: string;
   description: string;
   attachmentIds?: string[];
@@ -86,7 +84,6 @@ export async function createComplaintRecord(input: {
       .values({
         reference,
         employeeId: input.employeeId,
-        category: input.category,
         subject,
         description,
         status: "new",
@@ -244,7 +241,11 @@ export async function getComplaintRecords(scope: { type: "management" } | { type
   const rows = await db
     .select()
     .from(complaints)
-    .where(scope.type === "staff" ? eq(complaints.employeeId, scope.employeeId) : undefined)
+    .where(
+      scope.type === "staff"
+        ? and(eq(complaints.employeeId, scope.employeeId), isNull(complaints.withdrawnAt))
+        : isNull(complaints.withdrawnAt)
+    )
     .orderBy(desc(complaints.lastMessageAt));
 
   if (!rows.length) return [];
@@ -297,7 +298,6 @@ export async function getComplaintRecords(scope: { type: "management" } | { type
       organisation: "—",
       workArrangement: "In-house",
     },
-    category: r.category as ComplaintCategory,
     subject: r.subject,
     description: r.description,
     submittedAt: toIso(r.submittedAt),
@@ -312,7 +312,11 @@ export async function getComplaintRecords(scope: { type: "management" } | { type
 }
 
 export async function getComplaintById(id: string) {
-  const [row] = await db.select().from(complaints).where(eq(complaints.id, id)).limit(1);
+  const [row] = await db
+    .select()
+    .from(complaints)
+    .where(and(eq(complaints.id, id), isNull(complaints.withdrawnAt)))
+    .limit(1);
   return row ?? null;
 }
 
@@ -454,6 +458,8 @@ export async function setComplaintStatus(input: {
   toStatus: ComplaintStatus;
   note?: string;
   resolutionBody?: string;
+  /** Who initiated the change — controls which side gets the unread badge. */
+  actorSide?: "staff" | "management";
 }) {
   const now = new Date();
   if (input.toStatus === "resolved" && !input.resolutionBody?.trim()) {
@@ -502,13 +508,54 @@ export async function setComplaintStatus(input: {
         status: input.toStatus,
         lastMessageAt: now,
         updatedAt: now,
-        unreadByStaff: true,
-        unreadByManagement: false,
         resolvedAt: input.toStatus === "resolved" ? now : complaint.resolvedAt,
         reopenedAt: input.toStatus === "reopened" ? now : complaint.reopenedAt,
+        unreadByManagement: input.actorSide === "staff",
+        unreadByStaff: input.actorSide !== "staff",
       })
       .where(eq(complaints.id, complaint.id));
 
+    return { ok: true as const };
+  });
+}
+
+/**
+ * Soft-delete a complaint at the employee's request. The record and its
+ * conversation stay in Postgres for audit, but disappear from every inbox and
+ * can no longer be opened or replied to.
+ */
+export async function withdrawComplaint(input: {
+  complaintId: string;
+  actor: ComplaintActor;
+}) {
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    const [complaint] = await tx
+      .select()
+      .from(complaints)
+      .where(and(eq(complaints.id, input.complaintId), isNull(complaints.withdrawnAt)))
+      .limit(1);
+    if (!complaint) return { ok: false as const, message: "Complaint not found." };
+    if (input.actor.role !== "staff" || complaint.employeeId !== input.actor.employeeId) {
+      return { ok: false as const, message: "Only the employee who raised this complaint can withdraw it." };
+    }
+
+    await tx.insert(complaintMessages).values({
+      complaintId: complaint.id,
+      senderType: "system",
+      senderName: "WorkTrack",
+      body: `Complaint withdrawn by ${input.actor.name}.`,
+    });
+    await tx
+      .update(complaints)
+      .set({
+        withdrawnAt: now,
+        withdrawnByMembershipId: input.actor.membershipId,
+        unreadByManagement: false,
+        unreadByStaff: false,
+        updatedAt: now,
+      })
+      .where(eq(complaints.id, complaint.id));
     return { ok: true as const };
   });
 }

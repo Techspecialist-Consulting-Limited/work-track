@@ -38,6 +38,7 @@ import {
   validateReason,
   validateSubtaskTitle,
   validateTaskTitle,
+  type ValidationResult,
 } from "@/lib/worklog/validation";
 import { checkParentCanBeDone, checkSubtaskStatusChange, isTaskStatus } from "@/lib/worklog/status-rules";
 import { validateOnboardingInput, validateProfileField } from "@/lib/worklog/onboarding";
@@ -47,7 +48,7 @@ import {
   findCatalogueDuplicate,
   validateCatalogueName,
 } from "@/lib/worklog/client-catalogue";
-import { getZonedDateKey, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
+import { getZonedDateKey, getZonedDateParts, zonedDateTimeToDate } from "@/lib/worktrack/schedule-config";
 import { splitIntervalMinutes } from "@/lib/worklog/time";
 import {
   planTemplateApplication,
@@ -723,7 +724,15 @@ export async function createTaskAction(
 
 export async function updateTaskAction(
   membership: WorkTrackMembership,
-  input: { taskId: string; title: string; description?: string; categoryId?: string | null }
+  input: {
+    taskId: string;
+    title: string;
+    description?: string;
+    categoryId?: string | null;
+    /** Move the task to another team/project the employee belongs to. */
+    teamId?: string | null;
+    projectId?: string | null;
+  }
 ): Promise<ActionResult> {
   const employeeId = staffEmployeeId(membership);
   const task = await ownedTask(employeeId, input.taskId);
@@ -739,12 +748,41 @@ export async function updateTaskAction(
     if (!category) return { ok: false, message: "Choose a valid category." };
   }
 
+  let teamId = task.teamId;
+  let projectId = task.projectId;
+  if (input.projectId !== undefined && input.projectId !== null) {
+    const project = (
+      await db.select().from(teamProjects).where(eq(teamProjects.id, input.projectId)).limit(1)
+    )[0];
+    if (!project || project.archivedAt || !project.isActive) {
+      return { ok: false, message: "Choose an active project from your team." };
+    }
+    if (!(await isEmployeeInTeam(employeeId, project.teamId))) {
+      return { ok: false, message: "That project belongs to a team you are not assigned to." };
+    }
+    teamId = project.teamId;
+    projectId = project.id;
+  } else if (input.teamId !== undefined) {
+    const requested = input.teamId?.trim() || null;
+    if (requested) {
+      const team = await activeTeam(requested);
+      if (!team || !team.isActive) return { ok: false, message: "Choose an active team." };
+      if (!(await isEmployeeInTeam(employeeId, team.id))) {
+        return { ok: false, message: "You are not assigned to that team." };
+      }
+    }
+    teamId = requested;
+    projectId = null;
+  }
+
   await db
     .update(tasks)
     .set({
       title: input.title.trim(),
       description: input.description?.trim() || null,
       categoryId,
+      teamId,
+      projectId,
       updatedAt: new Date(),
     })
     .where(eq(tasks.id, input.taskId));
@@ -753,8 +791,36 @@ export async function updateTaskAction(
     "task.update",
     "task",
     input.taskId,
-    { title: task.title, description: task.description, categoryId: task.categoryId },
-    { title: input.title.trim(), description: input.description?.trim() || null, categoryId }
+    { title: task.title, description: task.description, categoryId: task.categoryId, teamId: task.teamId, projectId: task.projectId },
+    { title: input.title.trim(), description: input.description?.trim() || null, categoryId, teamId, projectId }
+  );
+  return { ok: true, taskId: input.taskId };
+}
+
+/**
+ * Archive or restore a task. Archiving hides it from active lists but keeps
+ * every historical entry, subtask and progress update resolvable.
+ */
+export async function archiveTaskAction(
+  membership: WorkTrackMembership,
+  input: { taskId: string; archived: boolean }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  const task = await ownedTask(employeeId, input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  if (Boolean(task.archivedAt) === input.archived) return { ok: true, taskId: input.taskId };
+
+  await db
+    .update(tasks)
+    .set({ archivedAt: input.archived ? new Date() : null, updatedAt: new Date() })
+    .where(eq(tasks.id, input.taskId));
+  await audit(
+    membership,
+    input.archived ? "task.archive" : "task.restore",
+    "task",
+    input.taskId,
+    { archivedAt: task.archivedAt?.toISOString() ?? null },
+    { archivedAt: input.archived ? new Date().toISOString() : null }
   );
   return { ok: true, taskId: input.taskId };
 }
@@ -1035,6 +1101,40 @@ export async function editProgressUpdateAction(
 /* Work entries                                                       */
 /* ------------------------------------------------------------------ */
 
+/** Work entries may overlap each other, but their times must still be valid. */
+function workTimeCheck(startAt: string, endAt: string): ValidationResult {
+  const start = new Date(startAt).getTime();
+  const end = new Date(endAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return { ok: false, message: "Enter a valid start and end time." };
+  if (end <= start) return { ok: false, message: "End time must be after start time." };
+  return { ok: true };
+}
+
+/** Breaks remain exclusive: no work entry may cover a break's time. */
+async function workBreakClash(
+  employeeId: string,
+  startAt: string,
+  endAt: string,
+  ignoreEntryId?: string
+): Promise<boolean> {
+  const start = new Date(startAt).getTime();
+  const end = new Date(endAt).getTime();
+  const rows = await db
+    .select({ id: timeEntries.id, startAt: timeEntries.startAt, endAt: timeEntries.endAt })
+    .from(timeEntries)
+    .where(
+      and(
+        eq(timeEntries.employeeId, employeeId),
+        eq(timeEntries.entryType, "break"),
+        isNull(timeEntries.voidedAt)
+      )
+    );
+  return rows.some((row) => {
+    if (row.id === ignoreEntryId) return false;
+    return start < (row.endAt?.getTime() ?? Number.POSITIVE_INFINITY) && row.startAt.getTime() < end;
+  });
+}
+
 export async function addWorkEntryAction(
   membership: WorkTrackMembership,
   input: EntryInput & { id: string }
@@ -1043,6 +1143,11 @@ export async function addWorkEntryAction(
   if (input.employeeId !== employeeId) return { ok: false, message: "You can only log your own work." };
   const desc = validateDescription(input.description);
   if (!desc.ok) return desc;
+  const times = workTimeCheck(input.startAt, input.endAt);
+  if (!times.ok) return times;
+  if (await workBreakClash(employeeId, input.startAt, input.endAt)) {
+    return { ok: false, message: "This time overlaps a break. Choose a different time." };
+  }
 
   const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
   let taskId: string | null = null;
@@ -1079,36 +1184,28 @@ export async function addWorkEntryAction(
   const split = splitFor(input);
   const duration = minutesBetween(input.startAt, input.endAt);
 
-  try {
-    await db.transaction(async (tx) => {
-      await tx.insert(timeEntries).values({
-        id: input.id,
-        employeeId,
-        entryType: "work",
-        taskId,
-        subtaskId,
-        clientCategoryId,
-        clientSubcategoryId,
-        description: input.description.trim(),
-        startAt: new Date(input.startAt),
-        endAt: new Date(input.endAt),
-        durationMinutes: duration,
-        normalMinutes: split.normalMinutes,
-        overtimeMinutes: split.overtimeMinutes,
-        workLocation: input.workLocation,
-        workType: split.overtimeMinutes >= duration ? "overtime" : "normal",
-        evidenceLink: input.evidenceLink?.trim() || null,
-        isReportedOvertime: Boolean(input.isReportedOvertime),
-        createdByMembershipId: membership.membershipId,
-      });
+  await db.transaction(async (tx) => {
+    await tx.insert(timeEntries).values({
+      id: input.id,
+      employeeId,
+      entryType: "work",
+      taskId,
+      subtaskId,
+      clientCategoryId,
+      clientSubcategoryId,
+      description: input.description.trim(),
+      startAt: new Date(input.startAt),
+      endAt: new Date(input.endAt),
+      durationMinutes: duration,
+      normalMinutes: split.normalMinutes,
+      overtimeMinutes: split.overtimeMinutes,
+      workLocation: input.workLocation,
+      workType: split.overtimeMinutes >= duration ? "overtime" : "normal",
+      evidenceLink: input.evidenceLink?.trim() || null,
+      isReportedOvertime: Boolean(input.isReportedOvertime),
+      createdByMembershipId: membership.membershipId,
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "";
-    if (msg.includes("time_entries_no_overlap") || msg.includes("23P01")) {
-      return { ok: false, message: "This overlaps an existing entry. Adjust the time and try again." };
-    }
-    throw e;
-  }
+  });
   await linkAttachments(employeeId, input.id, input.attachmentIds);
   await audit(membership, "entry.create", "time_entry", input.id, null, {
     employeeId,
@@ -1140,6 +1237,11 @@ export async function editWorkEntryAction(
       .limit(1)
   )[0];
   if (!existing) return { ok: false, message: "This entry no longer exists." };
+  const times = workTimeCheck(input.startAt, input.endAt);
+  if (!times.ok) return times;
+  if (await workBreakClash(employeeId, input.startAt, input.endAt, entryId)) {
+    return { ok: false, message: "This time overlaps a break. Choose a different time." };
+  }
 
   const isClientEntry = Boolean(input.clientCategoryId || input.clientSubcategoryId);
   const wasClientEntry = Boolean(existing.clientCategoryId || existing.clientSubcategoryId);
@@ -1215,38 +1317,30 @@ export async function editWorkEntryAction(
 
   const split = splitFor(input);
   const duration = minutesBetween(input.startAt, input.endAt);
-  try {
-    await db.transaction(async (tx) => {
-      await tx
-        .update(timeEntries)
-        .set({
-          taskId,
-          subtaskId,
-          clientCategoryId,
-          clientSubcategoryId,
-          description: input.description.trim(),
-          startAt: new Date(input.startAt),
-          endAt: new Date(input.endAt),
-          durationMinutes: duration,
-          normalMinutes: split.normalMinutes,
-          overtimeMinutes: split.overtimeMinutes,
-          workLocation: input.workLocation,
-          workType: split.overtimeMinutes >= duration ? "overtime" : "normal",
-          evidenceLink: input.evidenceLink?.trim() || null,
-          isReportedOvertime: Boolean(input.isReportedOvertime),
-          revisionCount: sql`${timeEntries.revisionCount} + 1`,
-          updatedByMembershipId: membership.membershipId,
-          updatedAt: new Date(),
-        })
-        .where(eq(timeEntries.id, entryId));
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "";
-    if (msg.includes("time_entries_no_overlap") || msg.includes("23P01")) {
-      return { ok: false, message: "This overlaps an existing entry. Adjust the time and try again." };
-    }
-    throw e;
-  }
+  await db.transaction(async (tx) => {
+    await tx
+      .update(timeEntries)
+      .set({
+        taskId,
+        subtaskId,
+        clientCategoryId,
+        clientSubcategoryId,
+        description: input.description.trim(),
+        startAt: new Date(input.startAt),
+        endAt: new Date(input.endAt),
+        durationMinutes: duration,
+        normalMinutes: split.normalMinutes,
+        overtimeMinutes: split.overtimeMinutes,
+        workLocation: input.workLocation,
+        workType: split.overtimeMinutes >= duration ? "overtime" : "normal",
+        evidenceLink: input.evidenceLink?.trim() || null,
+        isReportedOvertime: Boolean(input.isReportedOvertime),
+        revisionCount: sql`${timeEntries.revisionCount} + 1`,
+        updatedByMembershipId: membership.membershipId,
+        updatedAt: new Date(),
+      })
+      .where(eq(timeEntries.id, entryId));
+  });
   await linkAttachments(employeeId, entryId, input.attachmentIds);
   await audit(
     membership,
@@ -1306,6 +1400,119 @@ export async function voidWorkEntryAction(
     endAt: entry.endAt?.toISOString() ?? null,
   });
   return { ok: true };
+}
+
+/**
+ * Copies a staff member's work entries and closed breaks from one Lagos day to
+ * another, preserving time-of-day. Target slots that already have a record, and
+ * work linked to a now-closed task, are skipped rather than overwriting.
+ */
+export async function copyEntriesToDayAction(
+  membership: WorkTrackMembership,
+  input: { fromDateKey: string; toDateKey: string }
+): Promise<ActionResult & { copied?: number; skipped?: number }> {
+  const employeeId = staffEmployeeId(membership);
+  const dateShape = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateShape.test(input.fromDateKey) || !dateShape.test(input.toDateKey)) {
+    return { ok: false, message: "Choose valid dates." };
+  }
+  if (input.fromDateKey === input.toDateKey) {
+    return { ok: false, message: "Choose a different day to copy to." };
+  }
+
+  const rows = await db
+    .select()
+    .from(timeEntries)
+    .where(and(eq(timeEntries.employeeId, employeeId), isNull(timeEntries.voidedAt)));
+  const source = rows.filter((row) => getZonedDateKey(row.startAt) === input.fromDateKey);
+  if (!source.length) return { ok: false, message: "That day has no entries to copy." };
+
+  const [ty, tm, td] = input.toDateKey.split("-").map(Number);
+  const targetStart = zonedDateTimeToDate(ty, tm, td, 0, 0);
+  const targetEnd = zonedDateTimeToDate(ty, tm, td + 1, 0, 0);
+  const targetRows = rows.filter((row) => row.startAt >= targetStart && row.startAt < targetEnd);
+  const clashes = (start: Date, end: Date) =>
+    targetRows.some((row) => {
+      const otherStart = row.startAt.getTime();
+      const otherEnd = (row.endAt ?? new Date()).getTime();
+      return start.getTime() < otherEnd && otherStart < end.getTime();
+    });
+
+  // Work on a closed task cannot be re-created; skip those rows.
+  const taskRows = await db.select().from(tasks).where(eq(tasks.employeeId, employeeId));
+  const closedTaskIds = new Set(taskRows.filter((task) => task.currentStatus === "done" || task.currentStatus === "dropped").map((task) => task.id));
+
+  let copied = 0;
+  let skipped = 0;
+  for (const row of source) {
+    if (row.entryType === "break" && !row.endAt) {
+      skipped += 1;
+      continue;
+    }
+    if (row.entryType === "work" && row.taskId && closedTaskIds.has(row.taskId)) {
+      skipped += 1;
+      continue;
+    }
+    const startParts = getZonedDateParts(row.startAt);
+    const endParts = row.endAt ? getZonedDateParts(row.endAt) : null;
+    const start = zonedDateTimeToDate(ty, tm, td, startParts.hour, startParts.minute);
+    const end = endParts ? zonedDateTimeToDate(ty, tm, td, endParts.hour, endParts.minute) : null;
+    if (!end || end.getTime() <= start.getTime() || clashes(start, end)) {
+      skipped += 1;
+      continue;
+    }
+    const duration = minutesBetween(start.toISOString(), end.toISOString());
+    const id = randomUUID();
+    if (row.entryType === "break") {
+      await db.insert(timeEntries).values({
+        id,
+        employeeId,
+        entryType: "break",
+        startAt: start,
+        endAt: end,
+        durationMinutes: duration,
+        createdByMembershipId: membership.membershipId,
+      });
+    } else {
+      const split = row.isReportedOvertime
+        ? { normalMinutes: 0, overtimeMinutes: duration }
+        : splitIntervalMinutes(start.toISOString(), end.toISOString());
+      await db.insert(timeEntries).values({
+        id,
+        employeeId,
+        entryType: "work",
+        taskId: row.taskId,
+        subtaskId: row.subtaskId,
+        clientCategoryId: row.clientCategoryId,
+        clientSubcategoryId: row.clientSubcategoryId,
+        description: row.description,
+        startAt: start,
+        endAt: end,
+        durationMinutes: duration,
+        normalMinutes: split.normalMinutes,
+        overtimeMinutes: split.overtimeMinutes,
+        workLocation: row.workLocation,
+        workType: row.workType,
+        evidenceLink: row.evidenceLink,
+        isReportedOvertime: row.isReportedOvertime,
+        createdByMembershipId: membership.membershipId,
+      });
+    }
+    copied += 1;
+  }
+
+  if (copied === 0) {
+    return { ok: false, message: "Nothing could be copied — those slots are already filled or the tasks are closed.", skipped };
+  }
+  await audit(
+    membership,
+    "entry.copy_day",
+    "employee",
+    employeeId,
+    { fromDateKey: input.fromDateKey },
+    { toDateKey: input.toDateKey, copied, skipped }
+  );
+  return { ok: true, copied, skipped };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1488,7 +1695,7 @@ export async function endBreakAction(
 
 /**
  * Correct an existing break. Breaks stay separate from work: no task/subtask is
- * ever attached, and the exclusion constraint rejects overlaps for this employee.
+ * ever attached, and breaks cannot overlap each other or a work entry.
  */
 export async function updateBreakAction(
   membership: WorkTrackMembership,
@@ -1625,7 +1832,7 @@ const AVATAR_MAX_CHARS = 400_000; // ~300KB binary
 
 export async function updateProfileAction(
   membership: WorkTrackMembership,
-  input: { fullName?: string; avatarUrl?: string | null }
+  input: { fullName?: string; avatarUrl?: string | null; jobTitle?: string; department?: string }
 ): Promise<ActionResult> {
   const employeeId = staffEmployeeId(membership);
   const employee = (await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1))[0];
@@ -1638,6 +1845,14 @@ export async function updateProfileAction(
       return { ok: false, message: "Enter your full name (2–120 characters)." };
     }
     set.fullName = name;
+  }
+  if (input.jobTitle !== undefined) {
+    const jobTitle = validateProfileField(input.jobTitle, 80);
+    if (!jobTitle) return { ok: false, message: "Enter a job title." };
+    set.jobTitle = jobTitle;
+  }
+  if (input.department !== undefined) {
+    set.department = validateProfileField(input.department, 80);
   }
   if (input.avatarUrl !== undefined) {
     if (input.avatarUrl === null || input.avatarUrl === "") {
@@ -1653,6 +1868,8 @@ export async function updateProfileAction(
   await db.update(employees).set(set).where(eq(employees.id, employeeId));
   await audit(membership, "profile.update", "employee", employeeId, null, {
     fullName: set.fullName ?? null,
+    jobTitle: set.jobTitle ?? null,
+    department: set.department ?? null,
     avatarChanged: input.avatarUrl !== undefined,
   });
   return { ok: true };

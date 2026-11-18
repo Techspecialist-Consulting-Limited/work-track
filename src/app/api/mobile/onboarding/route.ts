@@ -7,6 +7,43 @@ import {
 } from "@/lib/auth/entra-token";
 import { getMembershipForIdentity } from "@/lib/auth/authorize";
 import { completeStaffOnboarding, snapshotFor } from "@/lib/db/worklog-actions";
+import { db } from "@/lib/db";
+import { organisations } from "@/lib/db/schema";
+import { and, eq } from "drizzle-orm";
+
+/**
+ * GET /api/mobile/onboarding
+ *
+ * Lists active client organisations so a not-yet-registered identity can
+ * complete client-site self-service onboarding. Bearer-authenticated only;
+ * returns minimal public fields (id + name).
+ */
+export async function GET(request: Request) {
+  await connection();
+  try {
+    const bearer = bearerTokenFrom(request);
+    if (!bearer) {
+      return NextResponse.json({ ok: false, message: "Authentication required." }, { status: 401 });
+    }
+    try {
+      await verifyWorkTrackBearerToken(bearer);
+    } catch (e) {
+      if (e instanceof EntraTokenError) {
+        return NextResponse.json({ ok: false, message: "Invalid or expired access token." }, { status: 401 });
+      }
+      throw e;
+    }
+    const rows = await db
+      .select({ id: organisations.id, name: organisations.name })
+      .from(organisations)
+      .where(and(eq(organisations.kind, "client"), eq(organisations.isActive, true)))
+      .orderBy(organisations.name);
+    return NextResponse.json({ ok: true, clientOrganisations: rows });
+  } catch (e) {
+    console.error("[mobile/onboarding:get]", e);
+    return NextResponse.json({ ok: false, message: "Something went wrong. Try again." }, { status: 500 });
+  }
+}
 
 /**
  * POST /api/mobile/onboarding

@@ -31,6 +31,7 @@ import {
   MOBILE_BASE_INPUT_CLASS,
   MOBILE_INPUT_CLASS,
   SCHEDULED_MINUTES,
+  dateKeyAfter,
 } from "./shared";
 import type { WorkLogController } from "./useWorkLogController";
 
@@ -166,6 +167,8 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               name={c.employee?.name ?? "Employee"}
               role={c.employee ? `${c.employee.role} · ${c.employee.department}` : "Staff"}
               avatarUrl={c.employee?.avatarUrl}
+              jobTitle={c.employee?.role}
+              department={c.employee?.department}
               editable
               required={Boolean(c.employee && !c.employee.avatarUrl)}
             />
@@ -181,14 +184,14 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
             </h1>
             <p className="mt-0.5 text-xs text-[#777A91]">
               {c.isHistoricalEdit
-                ? `Editing a record from ${formatDateLabel(c.effectiveDateKey)}.`
+                ? `${c.editingId ? "Editing" : "Logging"} work for ${formatDateLabel(c.effectiveDateKey)}.`
                 : "Record what you worked on today."}
             </p>
           </div>
           {c.editingId ? (
             <button
               type="button"
-              onClick={c.resetForm}
+              onClick={c.cancelForm}
               className="min-h-9 shrink-0 rounded-lg px-2 text-xs font-semibold text-[#6C45F5] hover:bg-[#F5F1FF]"
             >
               Cancel
@@ -219,6 +222,41 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
             />
             {c.workdayStatus}
           </span>
+        </div>
+
+        <div className="mb-3 rounded-xl border border-[#E7E6F0] bg-white p-3">
+          <label className="flex items-center justify-between gap-2 text-xs font-semibold text-[#53506B]">
+            <span className="inline-flex items-center gap-1.5">
+              <CalendarDays size={14} aria-hidden="true" className="text-[#6C45F5]" />
+              Logging date
+            </span>
+            <input
+              type="date"
+              value={c.entryDateKey}
+              max={c.todayKey}
+              disabled={Boolean(c.activeBreak)}
+              onChange={(event) => {
+                if (!event.target.value) return;
+                c.setEntryDateKey(event.target.value);
+                c.setSelectedSlot("");
+                c.setShowTimeAdjustment(false);
+                c.setError(null);
+              }}
+              className="min-h-10 rounded-lg border border-[#E7E6F0] bg-white px-2 text-sm text-[#17172F] outline-none focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15 disabled:opacity-50"
+            />
+          </label>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            {c.entryDateKey !== c.todayKey ? (
+              <button
+                type="button"
+                disabled={c.copyingDay || Boolean(c.activeBreak)}
+                onClick={() => void c.handleCopyDay(dateKeyAfter(c.entryDateKey, -1), c.entryDateKey)}
+                className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
+              >
+                {c.copyingDay ? "Copying…" : "Copy previous day"}
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {c.activeBreak ? (
@@ -420,12 +458,14 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                       value: slot.key,
                       label: slot.label,
                       description: !slot.available
-                        ? "Already recorded"
-                        : slot.current
-                          ? "Current hour"
-                          : c.nextAvailableSlot?.key === slot.key
-                            ? "Next available"
-                            : undefined,
+                        ? "Break time"
+                        : slot.recorded
+                          ? "Already recorded — add another"
+                          : slot.current
+                            ? "Current hour"
+                            : c.nextAvailableSlot?.key === slot.key
+                              ? "Next available"
+                              : undefined,
                       disabled: !slot.available,
                     })),
                     {
@@ -516,6 +556,18 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                 task’s current status.
               </p>
             ) : null}
+            {c.showUnloggedNotice ? (
+              <div className="rounded-xl bg-[#FFF8E8] px-3 py-2.5 text-xs leading-5 text-[#8A5A00]">
+                You have <strong>{formatMinutes(c.summary.notLoggedMinutes)}</strong> of unlogged time so far today.
+                <button
+                  type="button"
+                  onClick={c.dismissUnloggedNotice}
+                  className="ml-2 min-h-7 rounded-lg px-2 text-[11px] font-semibold underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
             {c.error ? (
               <p role="alert" className="rounded-xl bg-[#FDEEEE] px-3 py-2.5 text-sm text-[#B43A3A]">
                 {c.error}
@@ -562,6 +614,12 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
               <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[#D0D0DF]" />
               Remaining {formatMinutes(c.remainingMinutes)}
             </span>
+            {c.summary.overtimeMinutes > 0 ? (
+              <span className="inline-flex items-center gap-1 font-semibold text-[#7C3AED]">
+                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[#7C3AED]" />
+                Overtime {formatMinutes(c.summary.overtimeMinutes)}
+              </span>
+            ) : null}
           </div>
         </section>
       </main>

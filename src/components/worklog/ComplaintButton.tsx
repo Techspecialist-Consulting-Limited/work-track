@@ -5,14 +5,18 @@ import {
   ArrowLeft,
   CheckCircle2,
   FileText,
+  Image as ImageIcon,
   Loader2,
   MessageSquareWarning,
   Paperclip,
+  RotateCcw,
   Send,
+  Trash2,
   X,
 } from "lucide-react";
 import {
   COMPLAINT_STATUS_LABELS,
+  type ComplaintAttachment,
   type ComplaintRecord,
   type ComplaintStatus,
 } from "@/lib/complaints/types";
@@ -69,9 +73,7 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
   const [mineError, setMineError] = useState<string | null>(null);
   const [loadingMine, setLoadingMine] = useState(false);
   const [selected, setSelected] = useState<ComplaintRecord | null>(null);
-  const [reply, setReply] = useState("");
-  const [replying, setReplying] = useState(false);
-  const [replyError, setReplyError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [unreadTotal, setUnreadTotal] = useState(0);
 
   const refreshBadge = useCallback(async () => {
@@ -131,9 +133,8 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
     setFilePreviews({});
     setError(null);
     setDone(null);
+    setNotice(null);
     setSelected(null);
-    setReply("");
-    setReplyError(null);
   }
 
   function addFiles(list: FileList | File[] | null) {
@@ -189,12 +190,18 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
           body: JSON.stringify({ subject, description }),
         });
       }
-      const data = (await res.json().catch(() => null)) as { ok?: boolean; message?: string; reference?: string } | null;
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        message?: string;
+        reference?: string;
+        warning?: string;
+      } | null;
       if (!res.ok || !data?.ok) {
         setError(data?.message ?? "Could not submit the complaint. Try again.");
         return;
       }
       setDone(data.reference ?? "your complaint");
+      if (data.warning) setNotice(data.warning);
       setMine(null); // refresh list next time the tab opens
     } catch {
       setError("Could not submit the complaint. Check your connection and try again.");
@@ -205,8 +212,7 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
 
   async function openComplaint(record: ComplaintRecord) {
     setSelected(record);
-    setReply("");
-    setReplyError(null);
+    setNotice(null);
     if (record.unreadByStaff) {
       void fetch(`/api/complaints/${record.id}`, {
         method: "POST",
@@ -218,32 +224,26 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
     }
   }
 
-  async function sendReply() {
-    if (!selected || replying || !reply.trim()) return;
-    setReplying(true);
-    setReplyError(null);
+  /** Pull the latest shared conversation after a reply, reopen or status change. */
+  async function refreshSelected(id: string) {
     try {
-      const res = await fetch(`/api/complaints/${selected.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "reply", body: reply }),
-      });
-      const data = (await res.json().catch(() => null)) as { ok?: boolean; message?: string } | null;
-      if (!res.ok || !data?.ok) {
-        setReplyError(data?.message ?? "Could not send your reply.");
-        return;
-      }
-      setReply("");
-      const detail = await fetch(`/api/complaints/${selected.id}`);
-      const detailData = (await detail.json().catch(() => null)) as { ok?: boolean; complaint?: ComplaintRecord } | null;
-      if (detailData?.ok && detailData.complaint) setSelected(detailData.complaint);
+      const detail = await fetch(`/api/complaints/${id}`);
+      const data = (await detail.json().catch(() => null)) as { ok?: boolean; complaint?: ComplaintRecord } | null;
+      if (data?.ok && data.complaint) setSelected(data.complaint);
       await loadMine();
       void refreshBadge();
     } catch {
-      setReplyError("Could not send your reply. Check your connection.");
-    } finally {
-      setReplying(false);
+      // Keep the current view; the next focus/refresh will reconcile it.
     }
+  }
+
+  function handleWithdrawn() {
+    setSelected(null);
+    setMine(null);
+    setNotice("Complaint withdrawn. It has been removed from your list.");
+    setTab("mine");
+    void loadMine();
+    void refreshBadge();
   }
 
   const unreadCount = unreadTotal;
@@ -275,7 +275,7 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
         <div
           className="fixed inset-0 z-[90] flex items-end justify-center bg-[#17172F]/40 backdrop-blur-[2px] sm:items-center sm:p-4"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !submitting && !replying) setOpen(false);
+            if (event.target === event.currentTarget && !submitting) setOpen(false);
           }}
         >
           <section
@@ -294,7 +294,7 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
                 type="button"
                 aria-label="Close"
                 onClick={() => setOpen(false)}
-                disabled={submitting || replying}
+                disabled={submitting}
                 className="grid h-9 w-9 place-items-center rounded-lg text-[#777A91] hover:bg-[#F7F7FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
               >
                 <X size={17} aria-hidden="true" />
@@ -306,6 +306,7 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
                 mine={mine}
                 loading={loadingMine}
                 error={mineError}
+                notice={notice}
                 onRetry={() => {
                   setMine(null);
                   void loadMine();
@@ -326,6 +327,9 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
                     <p className="text-sm text-[#6B6880]">
                       Reference <span className="font-semibold text-[#39364F]">{done}</span> — the admin team will review it.
                     </p>
+                    {notice ? (
+                      <p role="status" className="rounded-lg bg-[#FFF8E8] px-3 py-2 text-xs text-[#8A5A00]">{notice}</p>
+                    ) : null}
                     <div className="mt-2 flex gap-2">
                       <button
                         type="button"
@@ -440,13 +444,14 @@ export function ComplaintButton({ compact = false }: { compact?: boolean }) {
               </>
             ) : (
               <ComplaintDetail
+                key={selected.id}
                 record={selected}
-                reply={reply}
-                setReply={setReply}
-                replying={replying}
-                replyError={replyError}
-                onBack={() => setSelected(null)}
-                onSend={sendReply}
+                onBack={() => {
+                  setSelected(null);
+                  setNotice(null);
+                }}
+                onChanged={() => void refreshSelected(selected.id)}
+                onWithdrawn={handleWithdrawn}
               />
             )}
           </section>
@@ -477,6 +482,7 @@ function MineView({
   mine,
   loading,
   error,
+  notice,
   onRetry,
   onOpen,
   onNew,
@@ -484,12 +490,16 @@ function MineView({
   mine: ComplaintRecord[] | null;
   loading: boolean;
   error: string | null;
+  notice: string | null;
   onRetry: () => void;
   onOpen: (record: ComplaintRecord) => void;
   onNew: () => void;
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      {notice ? (
+        <p role="status" className="mb-3 rounded-lg bg-[#E8F7EE] px-3 py-2 text-xs font-medium text-[#177A3D]">{notice}</p>
+      ) : null}
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-10 text-sm text-[#9A97AD]">
           <Loader2 size={15} className="animate-spin" aria-hidden="true" /> Loading…
@@ -529,7 +539,10 @@ function MineView({
                     {record.unreadByStaff ? <span className="h-2 w-2 shrink-0 rounded-full bg-[#B43A3A]" aria-label="Unread update" /> : null}
                   </span>
                   <span className="mt-0.5 block text-[11px] text-[#9A97AD]">
-                    {record.reference} · {formatDate(record.lastMessageAt)}
+                    {record.reference}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-[#9A97AD]">
+                    {record.assignedTo ? `Assigned to ${record.assignedTo} · ` : ""}{formatDate(record.lastMessageAt)}
                   </span>
                 </span>
                 <StatusPill status={record.status} />
@@ -542,37 +555,148 @@ function MineView({
   );
 }
 
+type PendingReplyAttachment = ComplaintAttachment & { uploading?: boolean; error?: string };
+
 function ComplaintDetail({
   record,
-  reply,
-  setReply,
-  replying,
-  replyError,
   onBack,
-  onSend,
+  onChanged,
+  onWithdrawn,
 }: {
   record: ComplaintRecord;
-  reply: string;
-  setReply: (value: string) => void;
-  replying: boolean;
-  replyError: string | null;
   onBack: () => void;
-  onSend: () => void;
+  onChanged: () => void | Promise<void>;
+  onWithdrawn: () => void;
 }) {
+  const [reply, setReply] = useState("");
+  const [reopenReason, setReopenReason] = useState("");
+  const [attachments, setAttachments] = useState<PendingReplyAttachment[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function addFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setError(null);
+    for (const file of Array.from(files)) {
+      const problem = validateEvidenceFile(file);
+      if (problem) {
+        setError(problem);
+        continue;
+      }
+      const tempId = `tmp-${Date.now()}-${Math.random()}`;
+      setAttachments((prev) => [
+        ...prev,
+        {
+          id: tempId,
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          sizeBytes: file.size,
+          kind: isEvidenceImage({ fileName: file.name, mimeType: file.type }) ? "image" : "document",
+          uploading: true,
+        },
+      ]);
+      try {
+        const form = new FormData();
+        form.set("complaintId", record.id);
+        form.set("file", file);
+        const res = await fetch("/api/complaints/attachments", { method: "POST", body: form });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.ok) throw new Error(data?.message || "Upload failed");
+        const uploaded = data.attachment as ComplaintAttachment;
+        setAttachments((prev) => prev.map((a) => (a.id === tempId ? uploaded : a)));
+      } catch (reason) {
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === tempId
+              ? { ...a, uploading: false, error: reason instanceof Error ? reason.message : "Upload failed" }
+              : a
+          )
+        );
+      }
+    }
+  }
+
+  function attachmentsReady(): boolean {
+    if (attachments.some((a) => a.uploading)) {
+      setError("Wait for uploads to finish.");
+      return false;
+    }
+    if (attachments.some((a) => a.error)) {
+      setError("Remove failed attachments before sending.");
+      return false;
+    }
+    return true;
+  }
+
+  async function postAction(type: "reply" | "reopen" | "withdraw", extra: Record<string, unknown> = {}) {
+    setError(null);
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/complaints/${record.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, ...extra }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) throw new Error(data?.message || "The action could not be completed.");
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The action could not be completed.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendReply() {
+    if ((!reply.trim() && !attachments.length) || !attachmentsReady()) return;
+    if (await postAction("reply", { body: reply, attachmentIds: attachments.map((a) => a.id) })) {
+      setReply("");
+      setAttachments([]);
+      await onChanged();
+    }
+  }
+
+  async function reopen() {
+    if (reopenReason.trim().length < 5) {
+      setError("Tell us why you are reopening this complaint.");
+      return;
+    }
+    if (!attachmentsReady()) return;
+    if (await postAction("reopen", { reason: reopenReason.trim(), attachmentIds: attachments.map((a) => a.id) })) {
+      setReopenReason("");
+      setAttachments([]);
+      await onChanged();
+    }
+  }
+
+  async function withdraw() {
+    if (await postAction("withdraw")) onWithdrawn();
+    else setConfirmWithdraw(false);
+  }
+
+  const resolved = record.status === "resolved";
+
   return (
     <>
-      <div className="flex shrink-0 items-center gap-2 border-b border-[#EEEAF2] px-3 py-2">
+      <div className="flex shrink-0 items-start gap-2 border-b border-[#EEEAF2] px-3 py-2">
         <button
           type="button"
           onClick={onBack}
           aria-label="Back to complaints"
-          className="grid h-8 w-8 place-items-center rounded-lg text-[#777A91] hover:bg-[#F7F7FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+          className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#777A91] hover:bg-[#F7F7FC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
         >
           <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-[#17172F]">{record.subject}</p>
-          <p className="text-[10px] text-[#9A97AD]">{record.reference}</p>
+          <p className="text-[10px] text-[#9A97AD]">
+            {record.reference}
+            {record.assignedTo ? ` · Assigned to ${record.assignedTo}` : ""}
+          </p>
         </div>
         <StatusPill status={record.status} />
       </div>
@@ -618,34 +742,128 @@ function ComplaintDetail({
       </div>
 
       <div className="shrink-0 border-t border-[#EEEAF2] px-4 py-3">
-        {record.status === "resolved" ? (
+        {resolved ? (
           <p className="mb-2 rounded-lg bg-[#E8F7EE] px-3 py-2 text-center text-[11px] font-semibold text-[#177A3D]">
-            This complaint is resolved. Replies are closed.
+            This complaint is resolved. If the issue continues, reopen it below.
           </p>
         ) : null}
-        <div className="flex items-end gap-2">
-          <textarea
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            rows={2}
-            maxLength={2000}
-            placeholder={record.status === "resolved" ? "Complaint resolved" : "Write a reply…"}
-            disabled={record.status === "resolved" || replying}
-            className={`${INPUT} resize-y`}
-          />
+
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          className="hidden"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.jpg,.jpeg,.png,.webp"
+          onChange={(event) => {
+            void addFiles(event.target.files);
+            event.target.value = "";
+          }}
+        />
+
+        {resolved ? (
+          <label className="block text-xs font-semibold text-[#53506B]">
+            Why are you reopening?
+            <textarea
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              rows={2}
+              maxLength={1000}
+              placeholder="Explain what is still unresolved…"
+              className={`${INPUT} mt-1 resize-y`}
+            />
+          </label>
+        ) : (
+          <label className="block text-xs font-semibold text-[#53506B]">
+            Reply
+            <textarea
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              rows={2}
+              maxLength={2000}
+              placeholder="Write a reply…"
+              className={`${INPUT} mt-1 resize-y`}
+            />
+          </label>
+        )}
+
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={onSend}
-            disabled={record.status === "resolved" || replying || !reply.trim()}
-            aria-label="Send reply"
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#6C45F5] text-white transition hover:bg-[#5935DE] disabled:opacity-40"
+            onClick={() => fileRef.current?.click()}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-[#E7E6F0] px-3 text-xs font-semibold text-[#5A3ED0] hover:bg-[#F5F1FF]"
           >
-            {replying ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Send size={15} aria-hidden="true" />}
+            <Paperclip size={13} aria-hidden="true" /> Attach files
+          </button>
+          <button
+            type="button"
+            onClick={() => void (resolved ? reopen() : sendReply())}
+            disabled={busy || attachments.some((a) => a.uploading) || (resolved ? reopenReason.trim().length < 5 : !reply.trim() && !attachments.length)}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-[#6C45F5] px-3 text-xs font-semibold text-white hover:bg-[#5935DE] disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : resolved ? <RotateCcw size={14} aria-hidden="true" /> : <Send size={14} aria-hidden="true" />}
+            {resolved ? "Reopen complaint" : "Send reply"}
           </button>
         </div>
-        {replyError ? (
-          <p role="alert" className="mt-2 rounded-lg bg-[#FDEEEE] px-3 py-2 text-xs text-[#B43A3A]">{replyError}</p>
+
+        {attachments.length ? (
+          <ul className="mt-2 space-y-1.5">
+            {attachments.map((att) => (
+              <li key={att.id} className="flex items-center justify-between gap-2 rounded-lg bg-[#F7F7FC] px-2.5 py-1.5 text-xs">
+                <span className="flex min-w-0 items-center gap-2">
+                  {att.kind === "image" ? <ImageIcon size={13} className="shrink-0 text-[#6C45F5]" aria-hidden="true" /> : <FileText size={13} className="shrink-0 text-[#6C45F5]" aria-hidden="true" />}
+                  <span className="truncate font-medium text-[#39364F]">{att.fileName}</span>
+                  <span className="shrink-0 text-[#8B8B9A]">{att.uploading ? "Uploading…" : att.error ?? formatFileSize(att.sizeBytes)}</span>
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${att.fileName}`}
+                  onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#777A91] hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
         ) : null}
+
+        {error ? (
+          <p role="alert" className="mt-2 rounded-lg bg-[#FDEEEE] px-3 py-2 text-xs text-[#B43A3A]">{error}</p>
+        ) : null}
+
+        <div className="mt-3 border-t border-[#F1F0F6] pt-2">
+          {confirmWithdraw ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#FDEEEE] px-3 py-2">
+              <p className="text-[11px] font-medium text-[#B43A3A]">Withdraw this complaint? It will be hidden from your list and the admin inbox.</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmWithdraw(false)}
+                  className="min-h-8 rounded-lg border border-[#E7E6F0] px-2.5 text-[11px] font-semibold text-[#53506B] hover:bg-white"
+                >
+                  Keep it
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void withdraw()}
+                  disabled={busy}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-[#B43A3A] px-2.5 text-[11px] font-semibold text-white hover:bg-[#9E3030] disabled:opacity-50"
+                >
+                  {busy ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Trash2 size={12} aria-hidden="true" />}
+                  Withdraw
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmWithdraw(true)}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-[11px] font-semibold text-[#9A97AD] hover:bg-[#FDEEEE] hover:text-[#B43A3A]"
+            >
+              <Trash2 size={12} aria-hidden="true" /> Withdraw complaint
+            </button>
+          )}
+        </div>
       </div>
     </>
   );

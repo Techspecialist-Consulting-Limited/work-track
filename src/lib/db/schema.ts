@@ -686,7 +686,6 @@ export const complaints = pgTable(
     employeeId: uuid("employee_id")
       .notNull()
       .references(() => employees.id),
-    category: text("category").notNull(),
     subject: text("subject").notNull(),
     description: text("description").notNull(),
     status: text("status").notNull().default("new"),
@@ -698,6 +697,9 @@ export const complaints = pgTable(
     assignedToLabel: text("assigned_to_label"),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     reopenedAt: timestamp("reopened_at", { withTimezone: true }),
+    /** Soft delete: a withdrawn complaint stays in the DB for audit but leaves all inboxes. */
+    withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+    withdrawnByMembershipId: uuid("withdrawn_by_membership_id").references(() => memberships.id),
     ...timestamps,
   },
   (t) => [

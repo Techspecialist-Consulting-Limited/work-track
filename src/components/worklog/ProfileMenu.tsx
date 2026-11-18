@@ -10,9 +10,11 @@ interface ProfileMenuProps {
   name: string;
   role: string;
   avatarUrl?: string;
-  /** Staff can edit name + photo. Management accounts have no employee record. */
+  jobTitle?: string;
+  department?: string;
+  /** Staff can edit their own details. Management accounts have no employee record. */
   editable?: boolean;
-  /** When true the dialog cannot be dismissed until a photo is saved. */
+  /** Shows a friendly nudge to complete the profile. Never blocks the app. */
   required?: boolean;
 }
 
@@ -77,14 +79,26 @@ async function fileToAvatarDataUrl(file: File): Promise<string> {
   throw new Error("Could not compress the image enough. Try a smaller photo.");
 }
 
-export function ProfileMenu({ name, role, avatarUrl, editable = false, required = false }: ProfileMenuProps) {
+export function ProfileMenu({
+  name,
+  role,
+  avatarUrl,
+  jobTitle,
+  department,
+  editable = false,
+  required = false,
+}: ProfileMenuProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   // Drafts only hold unsaved edits; otherwise the saved props (which hydrate
   // asynchronously after mount) are the source of truth.
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [jobTitleDraft, setJobTitleDraft] = useState<string | null>(null);
+  const [departmentDraft, setDepartmentDraft] = useState<string | null>(null);
   const [photoDraft, setPhotoDraft] = useState<string | null | undefined>(undefined);
   const fullName = nameDraft ?? name;
+  const currentJobTitle = jobTitleDraft ?? jobTitle ?? "";
+  const currentDepartment = departmentDraft ?? department ?? "";
   const photo = photoDraft === undefined ? (avatarUrl ?? null) : photoDraft;
   const setFullName = setNameDraft;
   const setPhoto = setPhotoDraft;
@@ -96,24 +110,35 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
   const [toast, setToast] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Required is based on the saved avatar, so picking a photo doesn't flip the dialog mid-edit.
-  const isRequired = required && !avatarUrl;
-  const showDialog = open || isRequired;
+  // A missing photo is a nudge, not a gate — staff can always dismiss this.
+  const needsAttention = required && !avatarUrl;
+  const showDialog = open;
 
   function openDialog() {
     setNameDraft(null);
+    setJobTitleDraft(null);
+    setDepartmentDraft(null);
     setPhotoDraft(undefined);
     setPhotoLink("");
     setError(null);
     setOpen(true);
   }
 
+  function closeDialog() {
+    setOpen(false);
+    setNameDraft(null);
+    setJobTitleDraft(null);
+    setDepartmentDraft(null);
+    setPhotoDraft(undefined);
+    setError(null);
+  }
+
   useEffect(() => {
-    if (!showDialog || isRequired) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    if (!showDialog) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeDialog();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [showDialog, isRequired]);
+  }, [showDialog]);
 
   useEffect(() => {
     if (!toast) return;
@@ -140,7 +165,13 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
     setSaving(true);
     setError(null);
     const result = await saveProfile({
-      ...(editable ? { fullName: fullName.trim() } : {}),
+      ...(editable
+        ? {
+            fullName: fullName.trim(),
+            jobTitle: currentJobTitle.trim(),
+            department: currentDepartment.trim(),
+          }
+        : {}),
       avatarUrl: photo,
     });
     setSaving(false);
@@ -148,9 +179,7 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
       setError(result.message);
       return;
     }
-    setOpen(false);
-    setNameDraft(null);
-    setPhotoDraft(undefined);
+    closeDialog();
     setToast("Profile updated.");
     router.refresh();
   }
@@ -176,7 +205,7 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
           className="fixed inset-0 z-[70] grid place-items-center bg-[#17172B]/45 p-4 backdrop-blur-[2px]"
           role="presentation"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !isRequired) setOpen(false);
+            if (e.target === e.currentTarget) closeDialog();
           }}
         >
           <div
@@ -186,22 +215,20 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
             className="w-full max-w-sm rounded-3xl border border-[#EAE8F2] bg-white p-5 shadow-2xl"
           >
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-base font-bold text-[#17172B]">{isRequired ? "Complete your profile" : "Profile"}</h2>
-              {!isRequired ? (
-                <button
-                  type="button"
-                  onClick={() => setOpen(false)}
-                  aria-label="Close profile"
-                  className="grid h-8 w-8 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#F4F3FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
-                >
-                  <X size={16} aria-hidden="true" />
-                </button>
-              ) : null}
+              <h2 className="text-base font-bold text-[#17172B]">Your profile</h2>
+              <button
+                type="button"
+                onClick={closeDialog}
+                aria-label="Close profile"
+                className="grid h-8 w-8 place-items-center rounded-lg text-[#777A91] transition hover:bg-[#F4F3FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5]"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
             </div>
 
-            {isRequired ? (
+            {needsAttention ? (
               <p className="mb-4 rounded-xl bg-[#F5F1FF] px-3 py-2.5 text-xs leading-4 text-[#4A3FB0]">
-                Add your name and a photo to start logging work.
+                Add a photo so colleagues can recognise you — you can do it any time from here.
               </p>
             ) : null}
 
@@ -232,6 +259,31 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
                     className="min-h-11 w-full rounded-xl border border-[#E2E0EE] bg-white px-3 text-base text-[#17172B] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/25"
                   />
                 </label>
+
+                <div className="grid gap-3 min-[380px]:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-[#4A4665]">Job title</span>
+                    <input
+                      type="text"
+                      value={currentJobTitle}
+                      onChange={(e) => setJobTitleDraft(e.target.value)}
+                      maxLength={80}
+                      placeholder="e.g. Software Engineer"
+                      className="min-h-11 w-full rounded-xl border border-[#E2E0EE] bg-white px-3 text-sm text-[#17172B] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/25"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-[#4A4665]">Department / team</span>
+                    <input
+                      type="text"
+                      value={currentDepartment}
+                      onChange={(e) => setDepartmentDraft(e.target.value)}
+                      maxLength={80}
+                      placeholder="e.g. Engineering"
+                      className="min-h-11 w-full rounded-xl border border-[#E2E0EE] bg-white px-3 text-sm text-[#17172B] outline-none transition focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/25"
+                    />
+                  </label>
+                </div>
 
                 <div>
                   <span className="mb-1 block text-xs font-semibold text-[#4A4665]">Photo</span>
@@ -296,11 +348,11 @@ export function ProfileMenu({ name, role, avatarUrl, editable = false, required 
               {editable ? (
                 <button
                   type="button"
-                  disabled={saving || (editable && fullName.trim().length < 2) || (!photo && photoMode === "link" && !photoLink.trim() && !photo)}
+                  disabled={saving || (editable && fullName.trim().length < 2)}
                   onClick={handleSave}
                   className="flex min-h-11 w-full items-center justify-center rounded-xl bg-[#6C45F5] px-4 text-sm font-bold text-white transition hover:bg-[#5A36D6] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6C45F5] focus-visible:ring-offset-2"
                 >
-                  {saving ? "Saving…" : isRequired ? "Save & continue" : "Save"}
+                  {saving ? "Saving…" : "Save changes"}
                 </button>
               ) : null}
               <button

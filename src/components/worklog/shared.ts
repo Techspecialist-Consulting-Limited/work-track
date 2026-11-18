@@ -30,7 +30,10 @@ export interface WorkSlot {
   start: string;
   end: string;
   label: string;
+  /** False only when the slot overlaps a break. Work entries can be repeated. */
   available: boolean;
+  /** True when at least one work entry already covers this slot. */
+  recorded: boolean;
   current: boolean;
 }
 
@@ -100,7 +103,8 @@ export function makeWorkSlots(dateKey: string, entries: WorkEntry[], breaks: Bre
       start: `${String(Math.floor(start / 60)).padStart(2, "0")}:${String(start % 60).padStart(2, "0")}`,
       end: `${String(Math.floor(end / 60)).padStart(2, "0")}:${String(end % 60).padStart(2, "0")}`,
       label: `${formatClock(dateKey, start).replace(/\s[AP]M$/, "")}–${formatClock(dateKey, end).replace(/\s[AP]M$/, "")}`,
-      available: !occupiedByEntry && !occupiedByBreak,
+      available: !occupiedByBreak,
+      recorded: occupiedByEntry,
       current: today && currentMinute >= start && currentMinute < end,
     });
   }

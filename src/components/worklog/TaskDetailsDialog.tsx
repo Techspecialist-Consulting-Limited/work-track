@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -21,6 +23,7 @@ import {
 import { subtaskSummary } from "@/lib/worklog/status-rules";
 import {
   getProgressUpdatesForTask,
+  getProjectsForTeam,
   getSubtaskById,
   getSubtaskStatusHistory,
   getSubtasksForTask,
@@ -128,6 +131,25 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
   }
 
   const task = selectedId ? getTaskById(c.db, selectedId) : undefined;
+  const clientWorkMinutes = new Map<string, number>();
+  if (c.isClientSite) {
+    for (const entry of c.db.entries) {
+      if (entry.employeeId !== c.employee?.id || !entry.clientCategoryId) continue;
+      if (dateKeyOf(entry.startAt) !== c.tasksDateKey) continue;
+      const minutes = entry.normalMinutes + entry.overtimeMinutes;
+      clientWorkMinutes.set(entry.clientCategoryId, (clientWorkMinutes.get(entry.clientCategoryId) ?? 0) + minutes);
+    }
+  }
+  const clientWorkRows = [...clientWorkMinutes.entries()]
+    .map(([categoryId, minutes]) => ({
+      categoryId,
+      minutes,
+      name: c.db.clientCategories.find((row) => row.id === categoryId)?.name ?? "Client work",
+    }))
+    .sort((a, b) => b.minutes - a.minutes);
+  const archivedTasks = c.db.tasks
+    .filter((item) => item.employeeId === c.employee?.id && item.archivedAt)
+    .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
 
   return (
     <div
@@ -233,6 +255,63 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
                   )}
                 </>
               ) : null}
+              {c.otherOpenTasks.length ? (
+                <>
+                  <p className="mt-3 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#777A91]">
+                    Other open tasks
+                  </p>
+                  {c.otherOpenTasks.map((item) => renderTaskCard(item))}
+                </>
+              ) : null}
+              {archivedTasks.length ? (
+                <div className="mt-3 border-t border-[#EEEAF2] pt-3">
+                  <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-[#9A97AD]">
+                    Archived · records kept
+                  </p>
+                  <ul className="mt-1.5 space-y-1">
+                    {archivedTasks.map((item) => (
+                      <li key={item.id} className="flex items-center gap-2 rounded-lg bg-[#F7F7FC] px-2.5 py-2">
+                        <span className="min-w-0 flex-1 truncate text-[11px] text-[#53506B]">{item.title}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const result = c.handleArchiveTask(item.id, false);
+                            if (!result.ok) setError(result.message);
+                          }}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#E7E6F0] bg-white px-2 text-[10px] font-semibold text-[#5A3ED0] hover:bg-[#F5F1FF]"
+                        >
+                          <ArchiveRestore size={12} aria-hidden="true" /> Restore
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {c.isClientSite ? (
+                <div className="mt-3 border-t border-[#EEEAF2] pt-3">
+                  <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-[#777A91]">
+                    Client work · {formatDateLabel(c.tasksDateKey)}
+                  </p>
+                  {clientWorkRows.length ? (
+                    <ul className="mt-1.5 space-y-1">
+                      {clientWorkRows.map((row) => (
+                        <li
+                          key={row.categoryId}
+                          className="flex items-center justify-between gap-2 rounded-lg bg-[#FCFBFF] px-2.5 py-2 text-[11px]"
+                        >
+                          <span className="min-w-0 truncate text-[#39364F]">{row.name}</span>
+                          <span className="shrink-0 font-semibold text-[#5A3ED0]">{formatMinutes(row.minutes)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-1.5 rounded-lg bg-[#F7F7FC] px-3 py-3 text-center text-[11px] leading-4 text-[#777A91]">
+                      Client-site work is tracked by category, not tasks. Log an entry with a category and subcategory to
+                      see your progress here.
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
           </aside>
 
@@ -277,7 +356,14 @@ function TaskPanel({
   const entries = c.db.entries.filter((entry) => entry.taskId === taskId);
   const loggedMinutes = entries.reduce((total, entry) => total + durationMinutes(entry.startAt, entry.endAt), 0);
 
-  const [draft, setDraft] = useState({ id: "", title: "", description: "", categoryId: "" });
+  const [draft, setDraft] = useState({
+    id: "",
+    title: "",
+    description: "",
+    categoryId: "",
+    teamId: "",
+    projectId: "",
+  });
   const [statusReason, setStatusReason] = useState("");
   const [subtaskDraft, setSubtaskDraft] = useState({ title: "", description: "" });
   const [editingSubtask, setEditingSubtask] = useState({ id: "", title: "", description: "" });
@@ -294,6 +380,8 @@ function TaskPanel({
       title: task.title,
       description: task.description ?? "",
       categoryId: task.categoryId ?? "",
+      teamId: task.teamId ?? "",
+      projectId: task.projectId ?? "",
     });
     setStatusReason("");
     setSubtaskDraft({ title: "", description: "" });
@@ -315,6 +403,8 @@ function TaskPanel({
       title: draft.title,
       description: draft.description,
       categoryId: draft.categoryId || null,
+      teamId: draft.teamId || null,
+      projectId: draft.projectId || null,
     });
     if (!result.ok) setError(result.message);
     else setError(null);
@@ -549,6 +639,38 @@ function TaskPanel({
                 </select>
               </label>
             </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <label className="block text-[11px] font-semibold text-[#53506B]">
+                Team
+                <select
+                  value={draft.teamId}
+                  onChange={(event) => setDraft({ ...draft, teamId: event.target.value, projectId: "" })}
+                  className={INPUT_CLASS}
+                >
+                  <option value="">No team</option>
+                  {c.teams.map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-[11px] font-semibold text-[#53506B]">
+                Project
+                <select
+                  value={draft.projectId}
+                  onChange={(event) => setDraft({ ...draft, projectId: event.target.value })}
+                  className={INPUT_CLASS}
+                >
+                  <option value="">No project</option>
+                  {(draft.teamId ? getProjectsForTeam(c.db, draft.teamId) : []).map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <label className="mt-2 block text-[11px] font-semibold text-[#53506B]">
               Description
               <textarea
@@ -558,13 +680,30 @@ function TaskPanel({
                 className={`${INPUT_CLASS} resize-y`}
               />
             </label>
-            <button
-              type="button"
-              onClick={saveDetails}
-              className="mt-2 inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-[#6C45F5] px-3 text-xs font-semibold text-white hover:bg-[#5935DE]"
-            >
-              <Save size={14} aria-hidden="true" /> Save details
-            </button>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={saveDetails}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-[#6C45F5] px-3 text-xs font-semibold text-white hover:bg-[#5935DE]"
+              >
+                <Save size={14} aria-hidden="true" /> Save details
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const result = c.handleArchiveTask(task.id, !task.archivedAt);
+                  if (!result.ok) setError(result.message);
+                  else setError(null);
+                }}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[#E7E6F0] bg-white px-3 text-xs font-semibold text-[#53506B] hover:bg-[#F7F7FC]"
+              >
+                {task.archivedAt ? <ArchiveRestore size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
+                {task.archivedAt ? "Restore task" : "Archive task"}
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-[#9A97AD]">
+              Archiving hides a task from your lists but keeps all its work entries and history.
+            </p>
           </section>
         </div>
       ) : null}

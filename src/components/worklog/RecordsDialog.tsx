@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Coffee, Pencil, Save, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Coffee, Paperclip, Pencil, Save, Trash2, X } from "lucide-react";
 import { WORK_LOCATION_LABELS } from "@/lib/worklog/config";
-import { formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
+import { dateKeyOf, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import { getEntryLabel, getSubtaskById, getTaskById } from "@/lib/worklog/selectors";
+import { formatFileSize } from "./EvidenceAttachments";
 import { dateKeyAfter } from "./shared";
 import { StatusBadge } from "./StatusBadge";
 import type { WorkLogController } from "./useWorkLogController";
@@ -19,6 +20,22 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
   const [breakError, setBreakError] = useState<string | null>(null);
   if (!c.recordsOpen) return null;
   const { recordsSummary, recordsDateKey, todayKey, timeline, taskStatusCounts } = c;
+  const rangeFrom = c.exportFrom || todayKey;
+  const rangeTo = c.exportTo || todayKey;
+  const rangeEntries = c.db.entries.filter((entry) => {
+    if (entry.employeeId !== c.employee?.id) return false;
+    const key = dateKeyOf(entry.startAt);
+    return key >= rangeFrom && key <= rangeTo;
+  });
+  const rangeTotals = rangeEntries.reduce(
+    (acc, entry) => ({
+      work: acc.work + entry.normalMinutes + entry.overtimeMinutes,
+      normal: acc.normal + entry.normalMinutes,
+      overtime: acc.overtime + entry.overtimeMinutes,
+      count: acc.count + 1,
+    }),
+    { work: 0, normal: 0, overtime: 0, count: 0 }
+  );
 
   return (
     <div
@@ -146,6 +163,28 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
                             {item.entry.overtimeMinutes > 0 ? ` · Overtime ${formatMinutes(item.entry.overtimeMinutes)}` : ""}
                             {item.entry.isReportedOvertime ? " · Reported overtime" : ""}
                           </p>
+                          {(() => {
+                            const files = c.db.attachments.filter((row) => row.entryId === item.entry.id);
+                            if (!files.length) return null;
+                            return (
+                              <ul className="mt-2 space-y-1">
+                                {files.map((file) => (
+                                  <li key={file.id}>
+                                    <a
+                                      href={`/api/worklog/attachments/${file.id}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-[#F5F1FF] px-2 py-1 text-[11px] font-medium text-[#5A3ED0] hover:bg-[#EAE2FF]"
+                                    >
+                                      <Paperclip size={12} aria-hidden="true" className="shrink-0" />
+                                      <span className="truncate">{file.fileName}</span>
+                                      <span className="shrink-0 text-[#8B85A8]">{formatFileSize(file.sizeBytes)}</span>
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            );
+                          })()}
                         </div>
                         {confirmDeleteId === item.entry.id ? (
                           <span className="flex shrink-0 items-center gap-1">
@@ -336,6 +375,42 @@ export function RecordsDialog({ c }: { c: WorkLogController }) {
               ) : (
                 <p className="rounded-lg bg-[#F7F7FC] p-3 text-sm text-[#777A91]">No timeline records for this day.</p>
               )}
+            </section>
+            <section className="mt-5 border-t border-[#EEEAF2] pt-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-[13px] font-semibold text-[#39364F]">Date range totals</h3>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      c.setExportFrom(dateKeyAfter(todayKey, -6));
+                      c.setExportTo(todayKey);
+                    }}
+                    className="min-h-8 rounded-lg border border-[#E7E6F0] px-2 text-[11px] font-semibold text-[#5A3ED0] hover:bg-[#F5F1FF]"
+                  >
+                    Last 7 days
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      c.setExportFrom(`${todayKey.slice(0, 7)}-01`);
+                      c.setExportTo(todayKey);
+                    }}
+                    className="min-h-8 rounded-lg border border-[#E7E6F0] px-2 text-[11px] font-semibold text-[#5A3ED0] hover:bg-[#F5F1FF]"
+                  >
+                    This month
+                  </button>
+                </div>
+              </div>
+              <p className="mt-0.5 text-[11px] text-[#9A97AD]">
+                {formatDateLabel(rangeFrom)} – {formatDateLabel(rangeTo)}
+              </p>
+              <dl className="mt-2 grid grid-cols-2 gap-2">
+                <SummaryStat label="Total work" value={formatMinutes(rangeTotals.work)} />
+                <SummaryStat label="Normal hours" value={formatMinutes(rangeTotals.normal)} />
+                <SummaryStat label="Overtime" value={formatMinutes(rangeTotals.overtime)} />
+                <SummaryStat label="Entries" value={String(rangeTotals.count)} />
+              </dl>
             </section>
             <section className="mt-5 border-t border-[#EEEAF2] pt-3">
               <h3 className="mb-2 text-[13px] font-semibold text-[#39364F]">Export your records</h3>

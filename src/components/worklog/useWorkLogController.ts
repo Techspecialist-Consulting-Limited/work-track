@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getSchedulePeriod, getZonedDateKey, WORKTRACK_SCHEDULE } from "@/lib/worktrack/schedule-config";
 import { TASK_STATUS_LABELS } from "@/lib/worklog/config";
+import { breakDeadline } from "@/lib/worklog/validation";
 import {
   addProgressUpdate,
   addWorkEntry,
+  archiveTask,
+  copyEntriesToDay,
   createStaffProject,
   createSubtask,
   createTask,
@@ -91,6 +94,10 @@ export function useWorkLogController() {
   const [slotLocked, setSlotLocked] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDateKey, setEditingDateKey] = useState<string | null>(null);
+  /** Date the current/new entry belongs to. Defaults to today; editable for backfill. */
+  const [entryDateKey, setEntryDateKey] = useState(() => getZonedDateKey(new Date()));
+  const [copyingDay, setCopyingDay] = useState(false);
+  const [unloggedDismissed, setUnloggedDismissed] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -149,22 +156,24 @@ export function useWorkLogController() {
     () => getDaySummary(db, meId, todayKey, now),
     [db, meId, todayKey, now]
   );
+  const entrySummary = useMemo(
+    () => getDaySummary(db, meId, entryDateKey, now),
+    [db, meId, entryDateKey, now]
+  );
   const recordsSummary = useMemo(
     () => getDaySummary(db, meId, recordsDateKey, now),
     [db, meId, recordsDateKey, now]
   );
-  const taskIdsWithEntries = useMemo(
-    () => new Set(db.entries.map((entry) => entry.taskId).filter((id): id is string => id != null)),
-    [db.entries]
-  );
   const openTasks = openTasksWithEntries(db, meId);
+  // A task exists independently of whether it has entries yet. Voiding the
+  // only entry must not make the task disappear from "My Tasks".
   const employeeTasks = useMemo(
     () =>
       db.tasks
-        .filter((task) => task.employeeId === meId && taskIdsWithEntries.has(task.id))
+        .filter((task) => task.employeeId === meId && !task.archivedAt)
         .slice()
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    [db.tasks, meId, taskIdsWithEntries]
+    [db.tasks, meId]
   );
   const tasksForDay = useMemo(
     () =>
@@ -192,6 +201,12 @@ export function useWorkLogController() {
       .map((task) => ({ task, lastEntryKey: lastEntryKeyByTask.get(task.id) ?? "" }))
       .sort((a, b) => b.lastEntryKey.localeCompare(a.lastEntryKey));
   }, [db.entries, meId, employeeTasks, dayTaskIds, tasksDateKey]);
+  const otherOpenTasks = useMemo(() => {
+    const visible = new Set([...tasksForDay.map((task) => task.id), ...carriedOverTasks.map(({ task }) => task.id)]);
+    return employeeTasks.filter(
+      (task) => !visible.has(task.id) && (task.currentStatus === "ongoing" || task.currentStatus === "blocked")
+    );
+  }, [employeeTasks, tasksForDay, carriedOverTasks]);
   const activeBreak = db.breaks.find((brk) => brk.employeeId === meId && brk.endAt === null) ?? null;
   const teams = useMemo(() => getTeamsForEmployee(db, meId), [db, meId]);
   const activeTeamId = teamChoice || getSessionActiveTeamId() || teams[0]?.id || "";
@@ -213,10 +228,10 @@ export function useWorkLogController() {
   );
   const detailTask = taskDetailsTaskId ? getTaskById(db, taskDetailsTaskId) : undefined;
   const slots = useMemo(
-    () => makeWorkSlots(todayKey, db.entries.filter((entry) => entry.employeeId === meId), db.breaks.filter((brk) => brk.employeeId === meId), now),
-    [db.entries, db.breaks, meId, todayKey, now]
+    () => makeWorkSlots(entryDateKey, db.entries.filter((entry) => entry.employeeId === meId), db.breaks.filter((brk) => brk.employeeId === meId), now),
+    [db.entries, db.breaks, meId, entryDateKey, now]
   );
-  const effectiveDateKey = editingDateKey ?? todayKey;
+  const effectiveDateKey = entryDateKey;
   const workdayPeriod = getSchedulePeriod(now);
   const workdayStatus = workdayPeriod === "normal_hours"
     ? "Workday active"
@@ -225,12 +240,15 @@ export function useWorkLogController() {
       : workdayPeriod === "before_shift"
         ? `Starts at ${WORKTRACK_SCHEDULE.startTime}`
         : "Outside scheduled hours";
-  const isHistoricalEdit = Boolean(editingDateKey && editingDateKey !== todayKey);
+  const isHistoricalEdit = entryDateKey !== todayKey;
 
   const nowMs = now.getTime();
+  // Prefer an unused hour, but fall back to a recorded one so a staff member can
+  // add another entry even after every standard slot already has work.
   const nextAvailableSlot =
-    slots.find((slot) => slot.current && slot.available) ??
-    slots.find((slot) => slot.available && slotEndInstant(todayKey, slot) > nowMs) ??
+    slots.find((slot) => slot.current && slot.available && !slot.recorded) ??
+    slots.find((slot) => slot.available && !slot.recorded && slotEndInstant(entryDateKey, slot) > nowMs) ??
+    slots.find((slot) => slot.available && !slot.recorded) ??
     slots.find((slot) => slot.available) ??
     null;
 
@@ -244,7 +262,7 @@ export function useWorkLogController() {
       setIsReportedOvertime(false);
     }, 0);
     return () => window.clearTimeout(id);
-  }, [nextAvailableSlot, editingId, activeBreak, selectedSlot, showTimeAdjustment, slotLocked]);
+  }, [nextAvailableSlot, editingId, activeBreak, selectedSlot, showTimeAdjustment, slotLocked, entryDateKey]);
 
   useEffect(() => {
     if (!notice) return;
@@ -295,6 +313,8 @@ export function useWorkLogController() {
     setSlotLocked(false);
     setEditingId(null);
     setEditingDateKey(null);
+    setEntryDateKey(getZonedDateKey(new Date()));
+    setUnloggedDismissed(false);
     setSelectedSlot("");
     setLocation("office");
     setClientCategoryId("");
@@ -306,11 +326,29 @@ export function useWorkLogController() {
     setError(null);
   }
 
+  /** Deletes uploads that were never linked to a saved entry. */
+  function cleanupPendingUploads(items: EvidenceItem[] = attachments) {
+    for (const item of items) {
+      if (item.id && !item.linked) {
+        void fetch(`/api/worklog/attachments/${item.id}`, { method: "DELETE" }).catch(() => {});
+      }
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    }
+  }
+
+  /** Cancel the current entry/edit, discarding any not-yet-saved uploads. */
+  function cancelForm() {
+    cleanupPendingUploads();
+    resetForm();
+  }
+
   function beginEdit(entry: WorkEntry) {
+    cleanupPendingUploads();
     const dayKey = dateKeyOf(entry.startAt);
     const task = entry.taskId ? getTaskById(getDatabaseSnapshot(), entry.taskId) : undefined;
     setEditingId(entry.id);
     setEditingDateKey(dayKey);
+    setEntryDateKey(dayKey);
     if (task?.teamId) setTeamChoice(task.teamId);
     setProjectChoice(task?.projectId ?? "");
     setProjectSearch("");
@@ -713,6 +751,45 @@ export function useWorkLogController() {
     }
   }
 
+  // A forgotten break used to block the rest of the day forever. Close it at
+  // the earlier of the end of the working day or the remaining daily allowance.
+  useEffect(() => {
+    if (!activeBreak) return;
+    const check = () => {
+      if (Date.now() >= breakDeadline(db.breaks, activeBreak).getTime()) handleEndBreak(true);
+    };
+    check();
+    const id = window.setInterval(check, 30_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBreak?.id, db.breaks]);
+
+  async function handleCopyDay(fromDateKey: string, toDateKey: string) {
+    if (copyingDay) return;
+    setCopyingDay(true);
+    setError(null);
+    try {
+      const result = await copyEntriesToDay(fromDateKey, toDateKey);
+      if (!result || result.ok === false) {
+        setError(result?.message ?? "Could not copy that day. Try again.");
+        return;
+      }
+      setEntryDateKey(toDateKey);
+      setNotice(`Copied ${result.copied ?? 0} record${(result.copied ?? 0) === 1 ? "" : "s"}${result.skipped ? ` (${result.skipped} skipped)` : ""}.`);
+    } finally {
+      setCopyingDay(false);
+    }
+  }
+
+  function handleArchiveTask(taskId: string, archived: boolean) {
+    const result = archiveTask(taskId, archived);
+    if (result.ok) {
+      setNotice(archived ? "Task archived. Its records are kept." : "Task restored.");
+      if (taskDetailsTaskId === taskId && archived) closeTaskDetails();
+    } else setError(result.message);
+    return result;
+  }
+
   function openRecords() {
     setRecordsOpen(true);
     setRecordsTab("log");
@@ -765,6 +842,8 @@ export function useWorkLogController() {
     title: string;
     description?: string;
     categoryId?: string | null;
+    teamId?: string | null;
+    projectId?: string | null;
   }): MutationResult {
     const result = updateTask(input);
     if (result.ok) setNotice("Task details saved.");
@@ -911,6 +990,16 @@ export function useWorkLogController() {
   const initials = employee?.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase() ?? "WT";
   const dateEntries = recordsSummary.entries;
   const taskStatusCounts = getTaskStatusCounts(db.tasks, dateEntries);
+  const showUnloggedNotice =
+    summary.isWorkingDay &&
+    !summary.isFuture &&
+    !activeBreak &&
+    !unloggedDismissed &&
+    summary.notLoggedMinutes >= 60 &&
+    !editingId &&
+    !selectedSlot &&
+    !showTimeAdjustment;
+  const dismissUnloggedNotice = () => setUnloggedDismissed(true);
 
   const timeline = [
     ...dateEntries.map((entry) => ({ kind: "entry" as const, at: entry.startAt, entry })),
@@ -923,6 +1012,7 @@ export function useWorkLogController() {
     now,
     todayKey,
     summary,
+    entrySummary,
     recordsSummary,
     recordsDateKey,
     openTasks,
@@ -988,6 +1078,10 @@ export function useWorkLogController() {
     lockAutoSlot,
     editingId,
     editingDateKey,
+    entryDateKey,
+    setEntryDateKey,
+    copyingDay,
+    handleCopyDay,
     selectedSlot,
     setSelectedSlot,
     error,
@@ -1004,6 +1098,7 @@ export function useWorkLogController() {
     tasksDateKey,
     tasksForDay,
     carriedOverTasks,
+    otherOpenTasks,
     exportFrom,
     setExportFrom,
     exportTo,
@@ -1041,17 +1136,21 @@ export function useWorkLogController() {
     openUpdateProgress,
     closeUpdateProgress,
     resetForm,
+    cancelForm,
     beginEdit,
     deleteEntry,
     selectSlot,
     submitEntry,
     handleStartBreak,
     handleEndBreak: () => handleEndBreak(),
+    showUnloggedNotice,
+    dismissUnloggedNotice,
     openRecords,
     exportRecords,
     openTaskDetails,
     closeTaskDetails,
     saveTask,
+    handleArchiveTask,
     changeTaskStatus,
     addSubtask,
     saveSubtask,

@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  COMPLAINT_CATEGORY_LABELS,
   COMPLAINT_STATUS_LABELS,
   COMPLAINT_STATUS_ORDER,
   type ComplaintAttachment,
@@ -70,7 +69,6 @@ export function ComplaintsAdmin({ actorName, actorRole }: { actorName: string; a
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ComplaintStatus | "all">("all");
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [employeeFilter, setEmployeeFilter] = useState("all");
   const [organisationFilter, setOrganisationFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("");
@@ -131,7 +129,6 @@ export function ComplaintsAdmin({ actorName, actorRole }: { actorName: string; a
     const q = query.trim().toLowerCase();
     return complaints
       .filter((c) => (statusFilter === "all" ? true : c.status === statusFilter))
-      .filter((c) => (categoryFilter === "all" ? true : c.category === categoryFilter))
       .filter((c) => (employeeFilter === "all" ? true : c.employee.id === employeeFilter))
       .filter((c) => (organisationFilter === "all" ? true : c.employee.organisation === organisationFilter))
       .filter((c) => (dateFilter ? c.submittedAt.slice(0, 10) === dateFilter : true))
@@ -143,7 +140,7 @@ export function ComplaintsAdmin({ actorName, actorRole }: { actorName: string; a
           .includes(q);
       })
       .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
-  }, [complaints, query, statusFilter, categoryFilter, employeeFilter, organisationFilter, dateFilter]);
+  }, [complaints, query, statusFilter, employeeFilter, organisationFilter, dateFilter]);
 
   const selected = complaints.find((c) => c.id === selectedId) ?? filtered[0] ?? complaints[0] ?? null;
 
@@ -190,7 +187,6 @@ export function ComplaintsAdmin({ actorName, actorRole }: { actorName: string; a
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
             <label className="block text-[11px] font-semibold text-[#53506B] lg:col-span-2">Search<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Reference, subject, employee, team…" className="mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] px-3 text-sm outline-none focus:border-[#6C45F5]" /></label>
             <label className="block text-[11px] font-semibold text-[#53506B]">Status<select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as ComplaintStatus | "all")} className="mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-3 text-sm"><option value="all">All statuses</option>{COMPLAINT_STATUS_ORDER.map((s) => <option key={s} value={s}>{COMPLAINT_STATUS_LABELS[s]}</option>)}</select></label>
-            <label className="block text-[11px] font-semibold text-[#53506B]">Category<select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-3 text-sm"><option value="all">All categories</option>{Object.entries(COMPLAINT_CATEGORY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
             <label className="block text-[11px] font-semibold text-[#53506B]">Employee<select value={employeeFilter} onChange={(e) => setEmployeeFilter(e.target.value)} className="mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-3 text-sm"><option value="all">All employees</option>{employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}</select></label>
             <label className="block text-[11px] font-semibold text-[#53506B]">Organisation<select value={organisationFilter} onChange={(e) => setOrganisationFilter(e.target.value)} className="mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-3 text-sm"><option value="all">All organisations</option>{organisations.map((org) => <option key={org} value={org}>{org}</option>)}</select></label>
             <label className="block text-[11px] font-semibold text-[#53506B] sm:col-span-2 lg:col-span-1">Submission date<input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="mt-1 min-h-10 w-full rounded-lg border border-[#E7E6F0] bg-white px-3 text-sm" /></label>
@@ -218,7 +214,7 @@ export function ComplaintsAdmin({ actorName, actorRole }: { actorName: string; a
                             <span className="truncate text-xs font-bold text-[#17172F]">{complaint.reference} · {complaint.subject}</span>
                           </div>
                           <p className="mt-0.5 truncate text-[11px] text-[#53506B]">{complaint.employee.name} ({complaint.employee.employeeCode}) · {complaint.employee.team}</p>
-                          <p className="truncate text-[11px] text-[#8B8B9A]">{complaint.employee.organisation} · {COMPLAINT_CATEGORY_LABELS[complaint.category]}</p>
+                          <p className="truncate text-[11px] text-[#8B8B9A]">{complaint.employee.organisation}</p>
                         </div>
                         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[complaint.status]}`}>{COMPLAINT_STATUS_LABELS[complaint.status]}</span>
                       </div>
@@ -331,7 +327,7 @@ function ComplaintDetail({ complaint, onChanged }: { complaint: ComplaintRecord;
       <div className="border-b border-[#F1F0F6] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8B8B9A]">{complaint.reference} · {COMPLAINT_CATEGORY_LABELS[complaint.category]}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8B8B9A]">{complaint.reference}</p>
             <h2 className="mt-0.5 text-base font-bold text-[#17172F]">{complaint.subject}</h2>
             <p className="mt-1 text-xs text-[#777A91]">Submitted {formatDateTime(complaint.submittedAt)} · Last message {formatDateTime(complaint.lastMessageAt)}</p>
           </div>
@@ -352,7 +348,6 @@ function ComplaintDetail({ complaint, onChanged }: { complaint: ComplaintRecord;
         <InfoCard title="Complaint details" icon={<AlertCircle size={14} aria-hidden="true" />}>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
             <InfoItem label="Reference" value={complaint.reference} />
-            <InfoItem label="Category" value={COMPLAINT_CATEGORY_LABELS[complaint.category]} />
             <InfoItem label="Status" value={COMPLAINT_STATUS_LABELS[complaint.status]} />
             <InfoItem label="Assigned to" value={complaint.assignedTo ?? "Unassigned"} />
             <div className="col-span-2"><dt className="text-[10px] font-semibold uppercase tracking-wide text-[#8B8B9A]">Initial description</dt><dd className="mt-0.5 whitespace-pre-wrap leading-5 text-[#39364F]">{complaint.description}</dd></div>
