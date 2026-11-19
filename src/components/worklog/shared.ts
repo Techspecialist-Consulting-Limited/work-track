@@ -67,6 +67,25 @@ export function slotEndInstant(dateKey: string, slot: WorkSlot): number {
   return new Date(toLagosIso(dateKey, slot.end)).getTime();
 }
 
+/** Existing work records covering a proposed time, used for the reused-slot warning. */
+export function findOverlappingWorkEntries(
+  entries: WorkEntry[],
+  employeeId: string,
+  startAt: string,
+  endAt: string,
+  ignoreEntryId?: string
+): WorkEntry[] {
+  const start = new Date(startAt).getTime();
+  const end = new Date(endAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+  return entries.filter((entry) => {
+    if (entry.employeeId !== employeeId || entry.id === ignoreEntryId) return false;
+    const entryStart = new Date(entry.startAt).getTime();
+    const entryEnd = new Date(entry.endAt).getTime();
+    return start < entryEnd && entryStart < end;
+  });
+}
+
 export function makeWorkSlots(dateKey: string, entries: WorkEntry[], breaks: BreakEntry[], now: Date): WorkSlot[] {
   const [year, month, day] = dateParts(dateKey);
   const weekday = new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay();

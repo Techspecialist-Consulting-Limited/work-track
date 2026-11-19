@@ -94,6 +94,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     editingId,
     selectedSlot,
     setSelectedSlot,
+    reusedSlotWarning,
     error,
     setError,
     activeBreak,
@@ -786,6 +787,16 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
 
           {activeBreak ? (
             <BreakStatus startAt={activeBreak.startAt} onEnd={handleEndBreak} />
+          ) : null}
+
+          {reusedSlotWarning && !activeBreak ? (
+            <p
+              role="status"
+              className="flex items-start gap-2 rounded-xl bg-[#FFF6E5] px-3 py-2.5 text-sm text-[#9A6200]"
+            >
+              <Info size={16} aria-hidden="true" className="mt-0.5 shrink-0" />
+              <span>{reusedSlotWarning}</span>
+            </p>
           ) : null}
 
           {!activeBreak ? (
