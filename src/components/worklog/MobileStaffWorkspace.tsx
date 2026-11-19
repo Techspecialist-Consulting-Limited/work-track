@@ -632,6 +632,15 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
             paddingBottom: keyboardInset ? 0 : "env(safe-area-inset-bottom)",
           }}
         >
+          {c.reusedSlotWarning ? (
+            <p
+              role="status"
+              className="mx-auto mb-2 flex w-full max-w-[560px] items-start gap-2 px-4 text-[11px] font-medium leading-4 text-[#9A6200]"
+            >
+              <Info size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
+              <span>{c.reusedSlotWarning}</span>
+            </p>
+          ) : null}
           <div className="mx-auto flex w-full max-w-[560px] items-stretch gap-2 px-4 py-3">
             {confirmBreak ? (
               <>

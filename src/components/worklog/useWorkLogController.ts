@@ -47,6 +47,7 @@ import {
 import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib/worklog/types";
 import { entryReportKind, isSelectableForEntry } from "@/lib/worklog/client-catalogue";
 import {
+  findOverlappingWorkEntries,
   getTaskStatusCounts,
   makeWorkSlots,
   NEW_PROJECT_OPTION,
@@ -232,6 +233,23 @@ export function useWorkLogController() {
     [db.entries, db.breaks, meId, entryDateKey, now]
   );
   const effectiveDateKey = entryDateKey;
+
+  const overlappingEntries = useMemo(
+    () =>
+      findOverlappingWorkEntries(
+        db.entries,
+        meId,
+        toLagosIso(effectiveDateKey, startTime),
+        toLagosIso(effectiveDateKey, endTime),
+        editingId ?? undefined
+      ),
+    [db.entries, meId, effectiveDateKey, startTime, endTime, editingId]
+  );
+  const reusedSlotWarning =
+    overlappingEntries.length > 0
+      ? `This time already has ${overlappingEntries.length} work record${overlappingEntries.length === 1 ? "" : "s"}. Saving will add another record for the same time.`
+      : null;
+
   const workdayPeriod = getSchedulePeriod(now);
   const workdayStatus = workdayPeriod === "normal_hours"
     ? "Workday active"
@@ -1084,6 +1102,7 @@ export function useWorkLogController() {
     handleCopyDay,
     selectedSlot,
     setSelectedSlot,
+    reusedSlotWarning,
     error,
     setError,
     notice,

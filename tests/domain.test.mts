@@ -10,7 +10,7 @@ import {
   validateTaskTitle,
   validateEntryTimes,
 } from "../src/lib/worklog/validation";
-import { makeWorkSlots } from "../src/components/worklog/shared";
+import { findOverlappingWorkEntries, makeWorkSlots } from "../src/components/worklog/shared";
 import type {
   BreakEntry,
   Task,
@@ -173,4 +173,29 @@ test("recorded work slots stay selectable while break slots remain blocked", () 
   };
   const breakSlots = makeWorkSlots("2026-11-06", [], [breakRow], now);
   assert.equal(breakSlots.find((slot) => slot.key === "540-600")?.available, false);
+});
+
+test("reused time slots are detected for the warning without blocking repeats", () => {
+  const first = entry("e1", "a", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00", 60);
+  const otherEmployee = {
+    ...entry("e2", "a", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00", 60),
+    employeeId: "emp-2",
+  };
+  const nextHour = entry("e3", "a", "2026-11-06T10:00:00+01:00", "2026-11-06T11:00:00+01:00", 60);
+  const entries = [first, otherEmployee, nextHour];
+
+  const overlaps = findOverlappingWorkEntries(entries, "emp-1", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00");
+  assert.deepEqual(overlaps.map((item) => item.id), ["e1"]);
+  assert.deepEqual(
+    findOverlappingWorkEntries(entries, "emp-1", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00", "e1"),
+    []
+  );
+  assert.deepEqual(
+    findOverlappingWorkEntries(entries, "emp-1", "2026-11-06T10:00:00+01:00", "2026-11-06T11:00:00+01:00"),
+    [nextHour]
+  );
+  assert.deepEqual(
+    findOverlappingWorkEntries(entries, "emp-1", "2026-11-06T11:00:00+01:00", "2026-11-06T10:00:00+01:00"),
+    []
+  );
 });
