@@ -105,6 +105,7 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     isHistoricalEdit,
     entryDateKey,
     setEntryDateKey,
+    returnToToday,
     copyingDay,
     handleCopyDay,
     showUnloggedNotice,
@@ -244,14 +245,24 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
           </label>
           <div className="flex items-center gap-2">
             {entryDateKey !== todayKey ? (
-              <button
-                type="button"
-                disabled={copyingDay || Boolean(activeBreak)}
-                onClick={() => void handleCopyDay(dateKeyAfter(entryDateKey, -1), entryDateKey)}
-                className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#FBFAFF] disabled:opacity-50"
-              >
-                {copyingDay ? "Copying…" : "Copy previous day"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={Boolean(activeBreak)}
+                  onClick={returnToToday}
+                  className="min-h-8 rounded-lg border border-[#E7E6F0] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#FBFAFF] disabled:opacity-50"
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  disabled={copyingDay || Boolean(activeBreak)}
+                  onClick={() => void handleCopyDay(dateKeyAfter(entryDateKey, -1), entryDateKey)}
+                  className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] transition hover:bg-[#FBFAFF] disabled:opacity-50"
+                >
+                  {copyingDay ? "Copying…" : "Copy previous day"}
+                </button>
+              </>
             ) : null}
           </div>
         </div>

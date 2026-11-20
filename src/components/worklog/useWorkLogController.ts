@@ -334,7 +334,8 @@ export function useWorkLogController() {
     setSlotLocked(false);
     setEditingId(null);
     setEditingDateKey(null);
-    setEntryDateKey(getZonedDateKey(new Date()));
+    // Keep the selected logging date so staff can record several tasks for the
+    // same historical day without the form jumping back to today after a save.
     setUnloggedDismissed(false);
     setSelectedSlot("");
     setLocation("office");
@@ -361,6 +362,12 @@ export function useWorkLogController() {
   function cancelForm() {
     cleanupPendingUploads();
     resetForm();
+  }
+
+  /** Explicitly return to today's date instead of silently resetting after a save. */
+  function returnToToday() {
+    cancelForm();
+    setEntryDateKey(todayKey);
   }
 
   function beginEdit(entry: WorkEntry) {
@@ -1105,6 +1112,7 @@ export function useWorkLogController() {
     editingDateKey,
     entryDateKey,
     setEntryDateKey,
+    returnToToday,
     copyingDay,
     handleCopyDay,
     selectedSlot,

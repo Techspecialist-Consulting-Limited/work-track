@@ -247,14 +247,24 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
           </label>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             {c.entryDateKey !== c.todayKey ? (
-              <button
-                type="button"
-                disabled={c.copyingDay || Boolean(c.activeBreak)}
-                onClick={() => void c.handleCopyDay(dateKeyAfter(c.entryDateKey, -1), c.entryDateKey)}
-                className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
-              >
-                {c.copyingDay ? "Copying…" : "Copy previous day"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={Boolean(c.activeBreak)}
+                  onClick={c.returnToToday}
+                  className="min-h-8 rounded-lg border border-[#E7E6F0] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  disabled={c.copyingDay || Boolean(c.activeBreak)}
+                  onClick={() => void c.handleCopyDay(dateKeyAfter(c.entryDateKey, -1), c.entryDateKey)}
+                  className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
+                >
+                  {c.copyingDay ? "Copying…" : "Copy previous day"}
+                </button>
+              </>
             ) : null}
           </div>
         </div>
