@@ -10,7 +10,13 @@ import {
   validateTaskTitle,
   validateEntryTimes,
 } from "../src/lib/worklog/validation";
-import { findOverlappingWorkEntries, makeWorkSlots } from "../src/components/worklog/shared";
+import {
+  findOverlappingWorkEntries,
+  findOverlappingWorkEntriesForTimeInput,
+  isValidTimeValue,
+  makeWorkSlots,
+  timeToMinutes,
+} from "../src/components/worklog/shared";
 import type {
   BreakEntry,
   Task,
@@ -197,5 +203,31 @@ test("reused time slots are detected for the warning without blocking repeats", 
   assert.deepEqual(
     findOverlappingWorkEntries(entries, "emp-1", "2026-11-06T11:00:00+01:00", "2026-11-06T10:00:00+01:00"),
     []
+  );
+});
+
+test("partial overtime input cannot break the reused-slot warning", () => {
+  const existing = entry("e1", "a", "2026-11-06T09:00:00+01:00", "2026-11-06T10:00:00+01:00", 60);
+  const entries = [existing];
+
+  for (const invalid of ["", "09", "09:", "09:0", "24:00", "09:60"]) {
+    assert.equal(isValidTimeValue(invalid), false, `${invalid} should be rejected`);
+    assert.deepEqual(
+      findOverlappingWorkEntriesForTimeInput(entries, "emp-1", "2026-11-06", invalid, "10:00"),
+      []
+    );
+    assert.deepEqual(
+      findOverlappingWorkEntriesForTimeInput(entries, "emp-1", "2026-11-06", "09:00", invalid),
+      []
+    );
+  }
+
+  assert.equal(isValidTimeValue("9:00"), true);
+  assert.equal(isValidTimeValue("23:59"), true);
+  assert.equal(timeToMinutes("9:00"), 540);
+  assert.equal(timeToMinutes("10:30"), 630);
+  assert.deepEqual(
+    findOverlappingWorkEntriesForTimeInput(entries, "emp-1", "2026-11-06", "09:00", "10:00").map((item) => item.id),
+    ["e1"]
   );
 });

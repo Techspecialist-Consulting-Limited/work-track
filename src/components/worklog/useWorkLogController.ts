@@ -47,12 +47,14 @@ import {
 import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib/worklog/types";
 import { entryReportKind, isSelectableForEntry } from "@/lib/worklog/client-catalogue";
 import {
-  findOverlappingWorkEntries,
+  findOverlappingWorkEntriesForTimeInput,
   getTaskStatusCounts,
+  isValidTimeValue,
   makeWorkSlots,
   NEW_PROJECT_OPTION,
   SCHEDULED_MINUTES,
   slotEndInstant,
+  timeToMinutes,
   toLagosIso,
 } from "./shared";
 import { isEvidenceImage, type EvidenceItem } from "./EvidenceAttachments";
@@ -236,11 +238,12 @@ export function useWorkLogController() {
 
   const overlappingEntries = useMemo(
     () =>
-      findOverlappingWorkEntries(
+      findOverlappingWorkEntriesForTimeInput(
         db.entries,
         meId,
-        toLagosIso(effectiveDateKey, startTime),
-        toLagosIso(effectiveDateKey, endTime),
+        effectiveDateKey,
+        startTime,
+        endTime,
         editingId ?? undefined
       ),
     [db.entries, meId, effectiveDateKey, startTime, endTime, editingId]
@@ -556,7 +559,11 @@ export function useWorkLogController() {
       setError("Select an available time slot or adjust the time manually.");
       return;
     }
-    if (!startTime || !endTime || endTime <= startTime) {
+    if (
+      !isValidTimeValue(startTime) ||
+      !isValidTimeValue(endTime) ||
+      timeToMinutes(endTime) <= timeToMinutes(startTime)
+    ) {
       setError("Choose a valid time period. The end must be after the start.");
       return;
     }
