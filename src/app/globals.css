@@ -88,6 +88,39 @@ body {
   }
 }
 
+/* Historical logging date: static red state plus a gentle pulsing ring. */
+.wt-date-warning {
+  position: relative;
+  display: inline-flex;
+}
+
+.wt-date-warning::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 2px solid #e5484d;
+  border-radius: 0.5rem;
+  pointer-events: none;
+  animation: wt-date-warning-pulse 1.2s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+
+@keyframes wt-date-warning-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wt-date-warning::after {
+    animation: none;
+    opacity: 0.9;
+  }
+}
+
 @media print {
   body,
   html {

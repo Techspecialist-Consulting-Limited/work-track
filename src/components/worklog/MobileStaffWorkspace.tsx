@@ -79,6 +79,12 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
       c.evidenceLink.trim() ||
       c.editingId
   );
+  const isHistoricalDate = c.entryDateKey !== c.todayKey;
+  const dateInputClass = `min-h-10 rounded-lg border px-2 text-sm outline-none focus:ring-2 disabled:opacity-50 ${
+    isHistoricalDate
+      ? "border-[#E5484D] bg-[#FFF5F5] text-[#B42318] focus:border-[#E5484D] focus:ring-[#E5484D]/20"
+      : "border-[#E7E6F0] bg-white text-[#17172F] focus:border-[#6C45F5] focus:ring-[#6C45F5]/15"
+  }`;
 
   function requestBreak() {
     if (formDirty) {
@@ -229,32 +235,50 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
             <span className="inline-flex items-center gap-1.5">
               <CalendarDays size={14} aria-hidden="true" className="text-[#6C45F5]" />
               Logging date
+              {isHistoricalDate ? (
+                <span id="mobile-logging-date-warning" role="status" className="text-[10px] font-semibold text-[#B42318]">
+                  Past date
+                </span>
+              ) : null}
             </span>
-            <input
-              type="date"
-              value={c.entryDateKey}
-              max={c.todayKey}
-              disabled={Boolean(c.activeBreak)}
-              onChange={(event) => {
-                if (!event.target.value) return;
-                c.setEntryDateKey(event.target.value);
-                c.setSelectedSlot("");
-                c.setShowTimeAdjustment(false);
-                c.setError(null);
-              }}
-              className="min-h-10 rounded-lg border border-[#E7E6F0] bg-white px-2 text-sm text-[#17172F] outline-none focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15 disabled:opacity-50"
-            />
+            <span className={isHistoricalDate ? "wt-date-warning" : undefined}>
+              <input
+                type="date"
+                value={c.entryDateKey}
+                max={c.todayKey}
+                disabled={Boolean(c.activeBreak)}
+                onChange={(event) => {
+                  if (!event.target.value) return;
+                  c.setEntryDateKey(event.target.value);
+                  c.setSelectedSlot("");
+                  c.setShowTimeAdjustment(false);
+                  c.setError(null);
+                }}
+                aria-describedby={isHistoricalDate ? "mobile-logging-date-warning" : undefined}
+                className={dateInputClass}
+              />
+            </span>
           </label>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            {c.entryDateKey !== c.todayKey ? (
-              <button
-                type="button"
-                disabled={c.copyingDay || Boolean(c.activeBreak)}
-                onClick={() => void c.handleCopyDay(dateKeyAfter(c.entryDateKey, -1), c.entryDateKey)}
-                className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
-              >
-                {c.copyingDay ? "Copying…" : "Copy previous day"}
-              </button>
+            {isHistoricalDate ? (
+              <>
+                <button
+                  type="button"
+                  disabled={Boolean(c.activeBreak)}
+                  onClick={c.returnToToday}
+                  className="min-h-8 rounded-lg border border-[#E7E6F0] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  disabled={c.copyingDay || Boolean(c.activeBreak)}
+                  onClick={() => void c.handleCopyDay(dateKeyAfter(c.entryDateKey, -1), c.entryDateKey)}
+                  className="min-h-8 rounded-lg border border-[#D9D4EC] bg-white px-2.5 text-[11px] font-semibold text-[#5A3ED0] disabled:opacity-50"
+                >
+                  {c.copyingDay ? "Copying…" : "Copy previous day"}
+                </button>
+              </>
             ) : null}
           </div>
         </div>

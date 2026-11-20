@@ -41,6 +41,17 @@ export function dateParts(dateKey: string): [number, number, number] {
   return dateKey.split("-").map(Number) as [number, number, number];
 }
 
+/** HTML time inputs can be empty or partial while the user edits them. */
+export function isValidTimeValue(time: string): boolean {
+  const match = /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(time);
+  return Boolean(match && Number(match[1]) <= 23);
+}
+
+export function timeToMinutes(time: string): number {
+  const [hour = 0, minute = 0] = time.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
 export function toLagosIso(dateKey: string, time: string): string {
   const [year, month, day] = dateParts(dateKey);
   const [hour, minute] = time.split(":").map(Number);
@@ -84,6 +95,28 @@ export function findOverlappingWorkEntries(
     const entryEnd = new Date(entry.endAt).getTime();
     return start < entryEnd && entryStart < end;
   });
+}
+
+/**
+ * Render-time wrapper for the reused-slot warning. A time input is often empty
+ * or partial while someone edits it, so skip conversion instead of throwing.
+ */
+export function findOverlappingWorkEntriesForTimeInput(
+  entries: WorkEntry[],
+  employeeId: string,
+  dateKey: string,
+  startTime: string,
+  endTime: string,
+  ignoreEntryId?: string
+): WorkEntry[] {
+  if (!isValidTimeValue(startTime) || !isValidTimeValue(endTime)) return [];
+  return findOverlappingWorkEntries(
+    entries,
+    employeeId,
+    toLagosIso(dateKey, startTime),
+    toLagosIso(dateKey, endTime),
+    ignoreEntryId
+  );
 }
 
 export function makeWorkSlots(dateKey: string, entries: WorkEntry[], breaks: BreakEntry[], now: Date): WorkSlot[] {
