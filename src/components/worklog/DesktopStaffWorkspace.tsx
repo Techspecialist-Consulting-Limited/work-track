@@ -172,6 +172,13 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     setError(null);
   };
 
+  const isHistoricalDate = entryDateKey !== todayKey;
+  const dateInputClass = `min-h-8 rounded-lg border px-2 text-xs outline-none focus:ring-2 disabled:opacity-50 ${
+    isHistoricalDate
+      ? "border-[#E5484D] bg-[#FFF5F5] text-[#B42318] focus:border-[#E5484D] focus:ring-[#E5484D]/20"
+      : "border-[#E7E6F0] bg-white text-[#17172F] focus:border-[#6C45F5] focus:ring-[#6C45F5]/15"
+  }`;
+
   const activityOptions = [
     { value: "", label: "No specific activity", description: "Log against the project" },
     ...projectSubtasks.map((subtask) => ({
@@ -234,17 +241,29 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
           <label className="flex items-center gap-2 text-[11px] font-semibold text-[#53506B]">
             <CalendarDays size={14} aria-hidden="true" className="text-[#6C45F5]" />
             Logging date
-            <input
-              type="date"
-              value={entryDateKey}
-              max={todayKey}
-              disabled={Boolean(activeBreak)}
-              onChange={(event) => changeEntryDate(event.target.value)}
-              className="min-h-8 rounded-lg border border-[#E7E6F0] bg-white px-2 text-xs text-[#17172F] outline-none focus:border-[#6C45F5] focus:ring-2 focus:ring-[#6C45F5]/15 disabled:opacity-50"
-            />
+            <span className={isHistoricalDate ? "wt-date-warning" : undefined}>
+              <input
+                type="date"
+                value={entryDateKey}
+                max={todayKey}
+                disabled={Boolean(activeBreak)}
+                onChange={(event) => changeEntryDate(event.target.value)}
+                aria-describedby={isHistoricalDate ? "desktop-logging-date-warning" : undefined}
+                className={dateInputClass}
+              />
+            </span>
+            {isHistoricalDate ? (
+              <span
+                id="desktop-logging-date-warning"
+                role="status"
+                className="text-[10px] font-semibold text-[#B42318]"
+              >
+                Past date
+              </span>
+            ) : null}
           </label>
           <div className="flex items-center gap-2">
-            {entryDateKey !== todayKey ? (
+            {isHistoricalDate ? (
               <>
                 <button
                   type="button"
