@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { Check, X } from "lucide-react";
 import { TASK_STATUS_LABELS, WORKLOG_RULES } from "@/lib/worklog/config";
-import { getSubtaskById, getSubtasksForTask, getTaskById } from "@/lib/worklog/selectors";
+import { getSubtaskById, getTaskById } from "@/lib/worklog/selectors";
+import { getSubtasksForDate } from "@/lib/worklog/task-cycles";
 import type { TaskStatus } from "@/lib/worklog/types";
 import { StatusBadge } from "./StatusBadge";
 import { STATUS_LABELS, STATUS_OPTIONS } from "./shared";
@@ -25,7 +26,7 @@ export function UpdateProgressDialog({ c }: { c: WorkLogController }) {
   if (!taskId) return null;
   const task = getTaskById(c.db, taskId);
   if (!task) return null;
-  const subtasks = getSubtasksForTask(c.db, taskId);
+  const subtasks = getSubtasksForDate(c.db.subtasks, taskId, c.tasksDateKey);
   const safeTaskId = taskId;
   const targetSubtask = targetId ? getSubtaskById(c.db, targetId) : undefined;
   const targetLabel = targetSubtask ? targetSubtask.title : task.title;

@@ -9,6 +9,7 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { buildSeedDatabase, SEED_EMPLOYEES } from "../src/lib/worklog/seed";
 import { splitIntervalMinutes } from "../src/lib/worklog/time";
+import { getZonedDateKey } from "../src/lib/worktrack/schedule-config";
 import * as schema from "../src/lib/db/schema";
 
 const client = postgres(process.env.DATABASE_URL!, {
@@ -32,6 +33,36 @@ const taskUuid = new Map(data.tasks.map((t) => [t.id, uuid(`task:${t.id}`)]));
 const subtaskUuid = new Map(data.subtasks.map((s) => [s.id, uuid(`subtask:${s.id}`)]));
 const progressUuid = new Map(data.progressUpdates.map((p) => [p.id, uuid(`progress:${p.id}`)]));
 
+// Seed subtasks and entries span the exercise window. Give each task/date one
+// cycle so the seeded data matches the daily-cycle model exactly.
+const subtaskWorkDate = new Map<string, string>();
+for (const subtask of data.subtasks) {
+  const settledAt = data.statusHistory
+    .filter(
+      (event) =>
+        event.subtaskId === subtask.id &&
+        (event.newStatus === "done" || event.newStatus === "dropped")
+    )
+    .map((event) => event.changedAt)
+    .sort()
+    .at(-1);
+  subtaskWorkDate.set(
+    subtask.id,
+    getZonedDateKey(new Date(settledAt ?? subtask.completedAt ?? subtask.createdAt))
+  );
+}
+
+const cycleKeys = new Set<string>();
+for (const subtask of data.subtasks) {
+  cycleKeys.add(`${subtask.taskId}:${subtaskWorkDate.get(subtask.id)}`);
+}
+for (const entry of data.entries) {
+  if (entry.taskId) {
+    cycleKeys.add(`${entry.taskId}:${getZonedDateKey(new Date(entry.startAt))}`);
+  }
+}
+const cycleUuid = new Map([...cycleKeys].map((key) => [key, uuid(`cycle:${key}`)]));
+
 async function main() {
   console.log(
     `Seeding ${data.entries.length} entries, ${data.breaks.length} breaks, ${data.tasks.length} tasks, ${data.subtasks.length} subtasks…`
@@ -46,6 +77,7 @@ async function main() {
     await tx.delete(schema.taskStatusHistory);
     await tx.delete(schema.timeEntries);
     await tx.delete(schema.taskSubtasks);
+    await tx.delete(schema.taskCycles);
     await tx.delete(schema.tasks);
     await tx.delete(schema.taskCategories);
 
@@ -99,10 +131,23 @@ async function main() {
       }))
     );
 
+    await tx.insert(schema.taskCycles).values(
+      [...cycleUuid].map(([key, id]) => {
+        const separator = key.lastIndexOf(":");
+        return {
+          id,
+          taskId: taskUuid.get(key.slice(0, separator))!,
+          workDate: key.slice(separator + 1),
+        };
+      })
+    );
+
     await tx.insert(schema.taskSubtasks).values(
       data.subtasks.map((s) => ({
         id: subtaskUuid.get(s.id)!,
         taskId: taskUuid.get(s.taskId)!,
+        cycleId: cycleUuid.get(`${s.taskId}:${subtaskWorkDate.get(s.id)}`)!,
+        workDate: subtaskWorkDate.get(s.id)!,
         title: s.title,
         description: s.description ?? null,
         status: s.status,

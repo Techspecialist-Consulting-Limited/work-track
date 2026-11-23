@@ -11,7 +11,9 @@ import {
   validateTaskTitle,
   type ValidationResult,
 } from "./validation";
+import { getZonedDateKey } from "@/lib/worktrack/schedule-config";
 import { checkParentCanBeDone, checkSubtaskStatusChange, nextCompletedAt } from "./status-rules";
+import { normalizeTaskTitle } from "./task-cycles";
 import { isSelectableForEntry } from "./client-catalogue";
 import type {
   BreakEntry,
@@ -21,6 +23,7 @@ import type {
   Subtask,
   Task,
   TaskCategory,
+  TaskCycle,
   TaskStatus,
   WorkEntry,
   WorkLocation,
@@ -32,10 +35,21 @@ type Listener = () => void;
 /** Chains follow-up syncs (e.g. addEntry) behind a just-created task's insert. */
 const pendingSyncs = new Map<string, Promise<unknown>>();
 
-function queueAfter(taskId: string | undefined, send: () => void) {
+function queueSync(
+  taskId: string | undefined,
+  action: string,
+  payload: Record<string, unknown>
+): Promise<SyncResponse | null> {
+  const run = () => syncAction(action, payload);
   const prior = taskId ? pendingSyncs.get(taskId) : undefined;
-  if (prior) void prior.then(send);
-  else send();
+  const sync = prior ? prior.catch(() => undefined).then(run) : run();
+  if (taskId) {
+    pendingSyncs.set(taskId, sync);
+    void sync.finally(() => {
+      if (pendingSyncs.get(taskId) === sync) pendingSyncs.delete(taskId);
+    });
+  }
+  return sync;
 }
 
 const EMPTY_DB: WorkLogDatabase = {
@@ -50,6 +64,7 @@ const EMPTY_DB: WorkLogDatabase = {
   categories: [],
   tasks: [],
   subtasks: [],
+  taskCycles: [],
   progressUpdates: [],
   entries: [],
   breaks: [],
@@ -91,6 +106,7 @@ function isDatabase(value: unknown): value is WorkLogDatabase {
     Array.isArray(db.projects) &&
     Array.isArray(db.tasks) &&
     Array.isArray(db.subtasks) &&
+    (!db.taskCycles || Array.isArray(db.taskCycles)) &&
     Array.isArray(db.progressUpdates) &&
     Array.isArray(db.entries) &&
     Array.isArray(db.breaks)
@@ -212,7 +228,7 @@ export function resetDatabase(): void {
   ensureLoaded();
 }
 
-interface SyncResponse {
+export interface SyncResponse {
   ok: boolean;
   message?: string;
   taskId?: string;
@@ -278,6 +294,8 @@ export interface TaskInput {
   description?: string;
   teamId?: string;
   projectId?: string;
+  /** Working date for the first daily cycle. */
+  workDate?: string;
   subtasks?: { title: string; description?: string }[];
 }
 
@@ -285,6 +303,26 @@ function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function withLocalTaskCycle(
+  db: WorkLogDatabase,
+  taskId: string,
+  workDate: string
+): { db: WorkLogDatabase; cycle: TaskCycle } {
+  const existing = (db.taskCycles ?? []).find(
+    (cycle) => cycle.taskId === taskId && cycle.workDate === workDate
+  );
+  if (existing) return { db, cycle: existing };
+  const now = new Date().toISOString();
+  const cycle: TaskCycle = {
+    id: newId(),
+    taskId,
+    workDate,
+    createdAt: now,
+    updatedAt: now,
+  };
+  return { db: { ...db, taskCycles: [...(db.taskCycles ?? []), cycle] }, cycle };
 }
 
 function splitFor(input: Pick<EntryInput, "startAt" | "endAt" | "isReportedOvertime">) {
@@ -399,7 +437,7 @@ export function addWorkEntry(input: EntryInput): MutationResult {
     revisions: [],
   };
   emit({ ...db, entries: [...db.entries, entry] });
-  queueAfter(task?.id, () => void syncAction("addEntry", { id, input }));
+  void queueSync(task?.id, "addEntry", { id, input });
   return { ok: true };
 }
 
@@ -485,7 +523,7 @@ export function editWorkEntry(entryId: string, input: EntryInput): MutationResul
     ],
   };
   emit({ ...db, entries: db.entries.map((e) => (e.id === entryId ? updated : e)) });
-  queueAfter(existing.taskId, () => void syncAction("editEntry", { entryId, input }));
+  void queueSync(existing.taskId, "editEntry", { entryId, input });
   return { ok: true };
 }
 
@@ -509,8 +547,23 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
     const check = validateTaskTitle(input.title ?? "");
     if (!check.ok) return check;
     title = input.title!.trim();
+    const key = normalizeTaskTitle(title);
+    const existing = db.tasks
+      .filter(
+        (task) =>
+          task.employeeId === input.employeeId &&
+          !task.archivedAt &&
+          !task.projectId &&
+          normalizeTaskTitle(task.title) === key
+      )
+      .sort((a, b) => {
+        const rank = (task: Task) => (task.currentStatus === "done" || task.currentStatus === "dropped" ? 1 : 0);
+        return rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt);
+      })[0];
+    if (existing) return { ok: true, taskId: existing.id };
   }
 
+  const workDate = input.workDate ?? getZonedDateKey(new Date());
   const now = new Date().toISOString();
   const taskId = newId();
   const task: Task = {
@@ -526,6 +579,7 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
     statusUpdatedAt: now,
   };
 
+  const cycleResult = withLocalTaskCycle(db, taskId, workDate);
   const subtaskRows: Subtask[] = [];
   const requestedSubtasks = (input.subtasks ?? []).filter((subtask) => subtask.title.trim());
   for (let index = 0; index < requestedSubtasks.length; index += 1) {
@@ -535,6 +589,8 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
     subtaskRows.push({
       id: newId(),
       taskId,
+      cycleId: cycleResult.cycle.id,
+      workDate,
       title: requested.title.trim(),
       description: requested.description?.trim() || undefined,
       status: "ongoing",
@@ -546,21 +602,20 @@ export function createTask(input: TaskInput): { ok: true; taskId: string } | { o
   }
 
   emit({
-    ...db,
-    tasks: [...db.tasks, task],
-    subtasks: [...db.subtasks, ...subtaskRows],
+    ...cycleResult.db,
+    tasks: [...cycleResult.db.tasks, task],
+    subtasks: [...cycleResult.db.subtasks, ...subtaskRows],
   });
-  const sync = syncAction("createTask", {
+  void queueSync(taskId, "createTask", {
     employeeId: input.employeeId,
     title,
     description: input.description,
     teamId: task.teamId,
     projectId: task.projectId,
+    workDate,
     id: taskId,
     subtasks: requestedSubtasks.map((subtask, index) => ({ ...subtask, id: subtaskRows[index].id })),
   });
-  pendingSyncs.set(taskId, sync);
-  void sync.finally(() => pendingSyncs.delete(taskId));
   return { ok: true, taskId };
 }
 
@@ -599,7 +654,7 @@ export function updateTask(input: {
         : t
     ),
   });
-  void syncAction("updateTask", { ...input, categoryId: categoryId ?? null });
+  void queueSync(input.taskId, "updateTask", { ...input, categoryId: categoryId ?? null });
   return { ok: true };
 }
 
@@ -616,7 +671,7 @@ export function archiveTask(taskId: string, archived: boolean): MutationResult {
         : t
     ),
   });
-  void syncAction("archiveTask", { taskId, archived });
+  void queueSync(taskId, "archiveTask", { taskId, archived });
   return { ok: true };
 }
 
@@ -654,11 +709,16 @@ export function updateTaskStatus(
     updatedAt: now,
   };
   emit({ ...db, tasks: db.tasks.map((t) => (t.id === taskId ? updated : t)) });
-  void syncAction("updateTaskStatus", { taskId, status, reason, note: note ?? reason });
+  void queueSync(taskId, "updateTaskStatus", { taskId, status, reason, note: note ?? reason });
   return { ok: true };
 }
 
-export function createSubtask(input: { taskId: string; title: string; description?: string }): MutationResult {
+export function createSubtask(input: {
+  taskId: string;
+  title: string;
+  description?: string;
+  workDate?: string;
+}): MutationResult {
   const check = validateSubtaskTitle(input.title);
   if (!check.ok) return check;
   const db = getDatabaseSnapshot();
@@ -667,15 +727,21 @@ export function createSubtask(input: { taskId: string; title: string; descriptio
   if (task.currentStatus === "done" || task.currentStatus === "dropped") {
     return { ok: false, message: "Reopen the main task before adding a subtask." };
   }
+  const workDate = input.workDate ?? getZonedDateKey(new Date());
   const now = new Date().toISOString();
-  const siblings = db.subtasks.filter((subtask) => subtask.taskId === input.taskId);
+  const siblings = db.subtasks.filter(
+    (subtask) => subtask.taskId === input.taskId && (!subtask.workDate || subtask.workDate === workDate)
+  );
   const displayOrder = siblings.length
     ? Math.max(...siblings.map((subtask) => subtask.displayOrder)) + 1
     : 0;
   const id = newId();
+  const cycleResult = withLocalTaskCycle(db, input.taskId, workDate);
   const subtask: Subtask = {
     id,
     taskId: input.taskId,
+    cycleId: cycleResult.cycle.id,
+    workDate,
     title: input.title.trim(),
     description: input.description?.trim() || undefined,
     status: "ongoing",
@@ -684,11 +750,42 @@ export function createSubtask(input: { taskId: string; title: string; descriptio
     updatedAt: now,
     statusUpdatedAt: now,
   };
-  emit({ ...db, subtasks: [...db.subtasks, subtask] });
-  const sync = syncAction("createSubtask", { ...input, id });
-  pendingSyncs.set(input.taskId, sync);
-  void sync.finally(() => pendingSyncs.delete(input.taskId));
+  emit({ ...cycleResult.db, subtasks: [...cycleResult.db.subtasks, subtask] });
+  void queueSync(input.taskId, "createSubtask", { ...input, id, workDate });
   return { ok: true };
+}
+
+export function finishTaskCycle(
+  taskId: string,
+  workDate: string,
+  finished: boolean
+): MutationResult {
+  const db = getDatabaseSnapshot();
+  if (!db.tasks.some((task) => task.id === taskId)) {
+    return { ok: false, message: "Task not found." };
+  }
+  const cycleResult = withLocalTaskCycle(db, taskId, workDate);
+  const now = new Date().toISOString();
+  const cycle: TaskCycle = {
+    ...cycleResult.cycle,
+    finishedAt: finished ? now : undefined,
+    updatedAt: now,
+  };
+  emit({
+    ...cycleResult.db,
+    taskCycles: [...(cycleResult.db.taskCycles ?? []).filter(
+      (item) => !(item.taskId === taskId && item.workDate === workDate)
+    ), cycle],
+  });
+  void queueSync(taskId, "finishTaskCycle", { taskId, workDate, finished });
+  return { ok: true };
+}
+
+export function loadPreviousTaskSubtasks(
+  taskId: string,
+  workDate: string
+): Promise<SyncResponse | null> {
+  return queueSync(taskId, "loadPreviousTaskSubtasks", { taskId, workDate });
 }
 
 export function updateSubtask(input: {
@@ -714,7 +811,7 @@ export function updateSubtask(input: {
         : item
     ),
   });
-  void syncAction("updateSubtask", input);
+  void queueSync(subtask.taskId, "updateSubtask", input);
   return { ok: true };
 }
 
@@ -753,7 +850,7 @@ export function updateSubtaskStatus(
         : item
     ),
   });
-  void syncAction("updateSubtaskStatus", { subtaskId, status, reason });
+  void queueSync(task.id, "updateSubtaskStatus", { subtaskId, status, reason });
   return { ok: true };
 }
 
@@ -785,7 +882,7 @@ export function addProgressUpdate(input: {
     revisions: [],
   };
   emit({ ...db, progressUpdates: [...db.progressUpdates, update] });
-  void syncAction("addProgressUpdate", { ...input, id });
+  void queueSync(input.taskId, "addProgressUpdate", { ...input, id });
   return { ok: true };
 }
 
@@ -827,7 +924,7 @@ export function editProgressUpdate(input: {
         : item
     ),
   });
-  void syncAction("editProgressUpdate", input);
+  void queueSync(update.taskId, "editProgressUpdate", input);
   return { ok: true };
 }
 
@@ -852,7 +949,7 @@ export function setManagementReview(
         : t
     ),
   });
-  void syncAction("setReview", { taskId, status, note });
+  void queueSync(taskId, "setReview", { taskId, status, note });
   return { ok: true };
 }
 

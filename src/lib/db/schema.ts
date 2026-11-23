@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  date,
   foreignKey,
   index,
   integer,
@@ -383,6 +384,24 @@ export const tasks = pgTable(
   ]
 );
 
+/**
+ * A main task is reusable across days. Each working date gets one cycle so
+ * subtask checklists and daily completion stay independent of task status.
+ */
+export const taskCycles = pgTable(
+  "task_cycles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    workDate: date("work_date", { mode: "string" }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("task_cycles_task_date_key").on(t.taskId, t.workDate)]
+);
+
 export const taskSubtasks = pgTable(
   "task_subtasks",
   {
@@ -390,6 +409,10 @@ export const taskSubtasks = pgTable(
     taskId: uuid("task_id")
       .notNull()
       .references(() => tasks.id),
+    cycleId: uuid("cycle_id")
+      .notNull()
+      .references(() => taskCycles.id),
+    workDate: date("work_date", { mode: "string" }).notNull(),
     title: text("title").notNull(),
     description: text("description"),
     status: taskStatusEnum("status").notNull().default("ongoing"),
@@ -405,6 +428,7 @@ export const taskSubtasks = pgTable(
   },
   (t) => [
     index("task_subtasks_task_order_idx").on(t.taskId, t.displayOrder),
+    index("task_subtasks_task_date_idx").on(t.taskId, t.workDate),
     index("task_subtasks_recovery_import_idx").on(t.recoveryImportId),
     check("task_subtasks_title_not_blank", sql`length(btrim(title)) > 0`),
     check(

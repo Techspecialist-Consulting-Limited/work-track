@@ -426,6 +426,29 @@ export function MobileStaffWorkspace({ c }: { c: WorkLogController }) {
                         </button>
                       </div>
                     ) : null}
+                    {c.projectTask ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          disabled={!c.canLoadPreviousSubtasks || c.loadingPreviousSubtasks}
+                          onClick={() => void c.loadSubtasksFromPreviousDay(c.projectTask!.id)}
+                          className="inline-flex min-h-8 items-center rounded-lg border border-[#E7E6F0] px-2 text-[11px] font-semibold text-[#53506B] hover:bg-[#F7F7FC] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {c.loadingPreviousSubtasks ? "Loading…" : "Load previous subtasks"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => c.finishCycle(c.projectTask!.id, !c.isProjectCycleFinished)}
+                          className={`inline-flex min-h-8 items-center rounded-lg border px-2 text-[11px] font-semibold ${
+                            c.isProjectCycleFinished
+                              ? "border-[#A7E8C4] bg-[#ECFDF5] text-[#047857]"
+                              : "border-[#CFC8F3] bg-[#F5F1FF] text-[#5A3ED0]"
+                          }`}
+                        >
+                          {c.isProjectCycleFinished ? "Reopen today" : "Finish for today"}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

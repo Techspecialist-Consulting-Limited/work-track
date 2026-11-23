@@ -11,6 +11,7 @@ import {
   subtaskStatusHistory,
   taskCategories,
   taskProgressUpdateRevisions,
+  taskCycles,
   taskProgressUpdates,
   taskStatusHistory,
   taskSubtasks,
@@ -33,6 +34,7 @@ import type {
   Subtask,
   Task,
   TaskCategory,
+  TaskCycle,
   Team,
   TeamProject,
   WorkEntry,
@@ -67,6 +69,7 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     categories: [],
     tasks: [],
     subtasks: [],
+    taskCycles: [],
     progressUpdates: [],
     entries: [],
     breaks: [],
@@ -201,13 +204,18 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
   const membershipNames = new Map(membershipRows.map((row) => [row.id, row.name ?? undefined]));
   const taskIds = taskRows.map((t) => t.id);
 
-  const [subtaskRows, progressRows, taskHistoryRows, subtaskHistoryRows] = taskIds.length
+  const [subtaskRows, cycleRows, progressRows, taskHistoryRows, subtaskHistoryRows] = taskIds.length
     ? await Promise.all([
         db
           .select()
           .from(taskSubtasks)
           .where(inArray(taskSubtasks.taskId, taskIds))
           .orderBy(asc(taskSubtasks.displayOrder), asc(taskSubtasks.createdAt)),
+        db
+          .select()
+          .from(taskCycles)
+          .where(inArray(taskCycles.taskId, taskIds))
+          .orderBy(asc(taskCycles.workDate)),
         db
           .select()
           .from(taskProgressUpdates)
@@ -225,7 +233,7 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
           .where(inArray(taskSubtasks.taskId, taskIds))
           .orderBy(asc(subtaskStatusHistory.changedAt)),
       ])
-    : [[], [], [], []];
+    : [[], [], [], [], []];
 
   const progressIds = progressRows.map((row) => row.id);
   const revisionRows = progressIds.length
@@ -335,7 +343,18 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
       statusSource: row.statusSource as Subtask["statusSource"],
       detailsSource: row.detailsSource as Subtask["detailsSource"],
       recoveryImportId: row.recoveryImportId ?? undefined,
+      cycleId: row.cycleId,
+      workDate: row.workDate,
     }));
+
+  const mappedCycles: TaskCycle[] = cycleRows.map((row) => ({
+    id: row.id,
+    taskId: row.taskId,
+    workDate: row.workDate,
+    finishedAt: toIso(row.finishedAt),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }));
 
   const mappedProgress: ProgressUpdate[] = progressRows.map((row) => ({
     id: row.id,
@@ -496,6 +515,7 @@ export async function loadWorkLogDb(scope: WorkLogScope = {}): Promise<WorkLogDa
     categories: mappedCategories,
     tasks: mappedTasks,
     subtasks: mappedSubtasks,
+    taskCycles: mappedCycles,
     progressUpdates: mappedProgress,
     entries: workEntries,
     breaks,

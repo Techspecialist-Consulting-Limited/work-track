@@ -16,10 +16,12 @@ import {
   editProgressUpdate,
   editWorkEntry,
   endBreak,
+  finishTaskCycle,
   getDatabaseSnapshot,
   getServerSnapshot,
   getSessionActiveTeamId,
   getSessionEmployeeId,
+  loadPreviousTaskSubtasks,
   selectTeam,
   startBreak,
   subscribeToDatabase,
@@ -40,11 +42,15 @@ import {
   getOpenTasks,
   getProjectById,
   getProjectsForTeam,
-  getSubtasksForTask,
   getTaskById,
   getTeamsForEmployee,
 } from "@/lib/worklog/selectors";
 import type { TaskStatus, WorkEntry, WorkLocation, WorkLogDatabase } from "@/lib/worklog/types";
+import {
+  getLatestPriorCycle,
+  getSubtasksForDate,
+  getTaskCycleForDate,
+} from "@/lib/worklog/task-cycles";
 import { entryReportKind, isSelectableForEntry } from "@/lib/worklog/client-catalogue";
 import {
   findOverlappingWorkEntriesForTimeInput,
@@ -100,6 +106,7 @@ export function useWorkLogController() {
   /** Date the current/new entry belongs to. Defaults to today; editable for backfill. */
   const [entryDateKey, setEntryDateKey] = useState(() => getZonedDateKey(new Date()));
   const [copyingDay, setCopyingDay] = useState(false);
+  const [loadingPreviousSubtasks, setLoadingPreviousSubtasks] = useState(false);
   const [unloggedDismissed, setUnloggedDismissed] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -218,6 +225,7 @@ export function useWorkLogController() {
     () => (activeTeamId ? getProjectsForTeam(db, activeTeamId) : []),
     [db, activeTeamId]
   );
+  const effectiveDateKey = entryDateKey;
   const selectedProject = projectChoice ? getProjectById(db, projectChoice) : undefined;
   const projectTask = selectedProject
     ? db.tasks.find(
@@ -225,7 +233,14 @@ export function useWorkLogController() {
           task.employeeId === meId && task.projectId === selectedProject.id && !task.archivedAt
       )
     : undefined;
-  const projectSubtasks = projectTask ? getSubtasksForTask(db, projectTask.id) : [];
+  const projectSubtasks = projectTask
+    ? getSubtasksForDate(db.subtasks, projectTask.id, effectiveDateKey)
+    : [];
+  const projectCycle = getTaskCycleForDate(db, projectTask?.id, effectiveDateKey);
+  const canLoadPreviousSubtasks = Boolean(
+    projectTask && getLatestPriorCycle(db, projectTask.id, effectiveDateKey)
+  );
+  const isProjectCycleFinished = Boolean(projectCycle?.finishedAt);
   const filteredProjects = projects.filter((project) =>
     project.name.toLocaleLowerCase().includes(projectSearch.trim().toLocaleLowerCase())
   );
@@ -234,7 +249,6 @@ export function useWorkLogController() {
     () => makeWorkSlots(entryDateKey, db.entries.filter((entry) => entry.employeeId === meId), db.breaks.filter((brk) => brk.employeeId === meId), now),
     [db.entries, db.breaks, meId, entryDateKey, now]
   );
-  const effectiveDateKey = entryDateKey;
 
   const overlappingEntries = useMemo(
     () =>
@@ -460,20 +474,25 @@ export function useWorkLogController() {
     }
     let taskId = projectTask?.id ?? "";
     if (!taskId) {
-      const created = createTask({ employeeId: meId, teamId: activeTeamId, projectId: selectedProject.id });
+      const created = createTask({
+        employeeId: meId,
+        teamId: activeTeamId,
+        projectId: selectedProject.id,
+        workDate: effectiveDateKey,
+      });
       if (!created.ok) {
         setError(created.message);
         return created;
       }
       taskId = created.taskId;
     }
-    const result = createSubtask({ taskId, title });
+    const result = createSubtask({ taskId, title, workDate: effectiveDateKey });
     if (!result.ok) {
       setError(result.message);
       return result;
     }
     const createdSubtask = getDatabaseSnapshot()
-      .subtasks.filter((subtask) => subtask.taskId === taskId)
+      .subtasks.filter((subtask) => subtask.taskId === taskId && subtask.workDate === effectiveDateKey)
       .filter((subtask) => subtask.title.toLocaleLowerCase() === title.toLocaleLowerCase())
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (createdSubtask) setActivityChoice(createdSubtask.id);
@@ -592,6 +611,7 @@ export function useWorkLogController() {
         employeeId: meId,
         teamId: activeTeamId,
         projectId: selectedProject.id,
+        workDate: effectiveDateKey,
       });
       if (!created.ok) {
         setError(created.message);
@@ -893,9 +913,41 @@ export function useWorkLogController() {
     return result;
   }
 
-  function addSubtask(taskId: string, title: string, description?: string): MutationResult {
-    const result = createSubtask({ taskId, title, description });
+  function addSubtask(
+    taskId: string,
+    title: string,
+    description?: string,
+    workDate?: string
+  ): MutationResult {
+    const result = createSubtask({ taskId, title, description, workDate });
     if (result.ok) setNotice("Subtask added.");
+    return result;
+  }
+
+  async function loadSubtasksFromPreviousDay(taskId: string, workDate?: string) {
+    if (loadingPreviousSubtasks) return;
+    const date = workDate ?? effectiveDateKey;
+    setLoadingPreviousSubtasks(true);
+    setError(null);
+    try {
+      const result = await loadPreviousTaskSubtasks(taskId, date);
+      if (result?.ok === false) {
+        setError(result.message ?? "Could not load the previous subtasks.");
+      } else if (result?.copied) {
+        setNotice(`Loaded ${result.copied} subtask${result.copied === 1 ? "" : "s"} for this date.`);
+      } else {
+        setNotice("No earlier subtasks were available to load.");
+      }
+    } finally {
+      setLoadingPreviousSubtasks(false);
+    }
+  }
+
+  function finishCycle(taskId: string, finished: boolean, workDate?: string) {
+    const result = finishTaskCycle(taskId, workDate ?? effectiveDateKey, finished);
+    if (result.ok) {
+      setNotice(finished ? "Task finished for this date." : "Task reopened for this date.");
+    }
     return result;
   }
 
@@ -1066,6 +1118,12 @@ export function useWorkLogController() {
     selectedProject,
     projectTask,
     projectSubtasks,
+    projectCycle,
+    canLoadPreviousSubtasks,
+    isProjectCycleFinished,
+    loadingPreviousSubtasks,
+    loadSubtasksFromPreviousDay,
+    finishCycle,
     activityChoice,
     setActivityChoice,
     newSubtaskTitle,

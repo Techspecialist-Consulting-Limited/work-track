@@ -52,12 +52,18 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
     setProjectSearch,
     projectChoice,
     selectedProject,
+    projectTask,
     projectSubtasks,
     activityChoice,
     setActivityChoice,
     newSubtaskTitle,
     setNewSubtaskTitle,
     addProjectSubtask,
+    canLoadPreviousSubtasks,
+    loadingPreviousSubtasks,
+    loadSubtasksFromPreviousDay,
+    isProjectCycleFinished,
+    finishCycle,
     handleProjectSelect,
     showProjectInfo,
     setShowProjectInfo,
@@ -620,6 +626,29 @@ export function DesktopStaffWorkspace({ c }: { c: WorkLogController }) {
                             >
                               <Plus size={12} aria-hidden="true" />
                               Add
+                            </button>
+                          </div>
+                        ) : null}
+                        {projectTask ? (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              disabled={!canLoadPreviousSubtasks || loadingPreviousSubtasks}
+                              onClick={() => void loadSubtasksFromPreviousDay(projectTask.id)}
+                              className="inline-flex min-h-7 items-center rounded-lg border border-[#E7E6F0] px-2 text-[11px] font-semibold text-[#53506B] hover:bg-[#F7F7FC] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {loadingPreviousSubtasks ? "Loading…" : "Load previous subtasks"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => finishCycle(projectTask.id, !isProjectCycleFinished)}
+                              className={`inline-flex min-h-7 items-center rounded-lg border px-2 text-[11px] font-semibold ${
+                                isProjectCycleFinished
+                                  ? "border-[#A7E8C4] bg-[#ECFDF5] text-[#047857]"
+                                  : "border-[#CFC8F3] bg-[#F5F1FF] text-[#5A3ED0]"
+                              }`}
+                            >
+                              {isProjectCycleFinished ? "Reopen today" : "Finish for today"}
                             </button>
                           </div>
                         ) : null}

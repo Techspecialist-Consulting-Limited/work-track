@@ -16,6 +16,7 @@ import {
   organisations,
   subtaskStatusHistory,
   taskCategories,
+  taskCycles,
   taskProgressUpdateRevisions,
   taskProgressUpdates,
   taskStatusHistory,
@@ -41,6 +42,7 @@ import {
   type ValidationResult,
 } from "@/lib/worklog/validation";
 import { checkParentCanBeDone, checkSubtaskStatusChange, isTaskStatus } from "@/lib/worklog/status-rules";
+import { isValidWorkDate, normalizeTaskTitle } from "@/lib/worklog/task-cycles";
 import { validateOnboardingInput, validateProfileField } from "@/lib/worklog/onboarding";
 import { deliverInvitationEmail } from "@/lib/email/deliver";
 import {
@@ -86,6 +88,10 @@ export type ActionResult =
       inviteToken?: string;
       inviteId?: string;
       templateId?: string;
+      /** Daily cycle created or updated by a task-cycle action. */
+      cycleId?: string;
+      copied?: number;
+      skipped?: number;
       /** Categories/subcategories created by a template application. */
       addedCategories?: number;
       addedSubcategories?: number;
@@ -192,6 +198,48 @@ async function ownedSubtask(taskId: string, subtaskId: string) {
       .where(and(eq(taskSubtasks.id, subtaskId), eq(taskSubtasks.taskId, taskId)))
       .limit(1)
   )[0];
+}
+
+type WorklogTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Gets or creates the single cycle for a task on a Lagos working date. */
+async function ensureTaskCycleRow(
+  tx: WorklogTransaction,
+  taskId: string,
+  workDate: string
+): Promise<string> {
+  if (!isValidWorkDate(workDate)) throw new Error("INVALID_WORK_DATE");
+  await tx
+    .insert(taskCycles)
+    .values({ taskId, workDate })
+    .onConflictDoNothing({ target: [taskCycles.taskId, taskCycles.workDate] });
+  const cycle = (
+    await tx
+      .select({ id: taskCycles.id })
+      .from(taskCycles)
+      .where(and(eq(taskCycles.taskId, taskId), eq(taskCycles.workDate, workDate)))
+      .limit(1)
+  )[0];
+  if (!cycle) throw new Error("CYCLE_CREATE_FAILED");
+  return cycle.id;
+}
+
+function entryWorkDate(startAt: string): string {
+  return getZonedDateKey(new Date(startAt));
+}
+
+async function validateEntrySubtaskDate(
+  taskId: string,
+  subtaskId: string | null,
+  startAt: string
+): Promise<ValidationResult> {
+  if (!subtaskId) return { ok: true };
+  const subtask = await ownedSubtask(taskId, subtaskId);
+  if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
+  if (subtask.workDate && subtask.workDate !== entryWorkDate(startAt)) {
+    return { ok: false, message: "Choose a subtask from the selected working date." };
+  }
+  return { ok: true };
 }
 
 /**
@@ -597,6 +645,65 @@ export async function promoteTeamProjectAction(
 /* Tasks                                                              */
 /* ------------------------------------------------------------------ */
 
+type TaskRow = typeof tasks.$inferSelect;
+
+/**
+ * Consolidate historical free-title duplicates without deleting data:
+ * entries, subtasks, history and cycles move to the canonical task, and the
+ * extra tasks are archived. An open task is preferred as the canonical one.
+ */
+async function mergeDuplicateFreeTitleTasks(
+  membership: WorkTrackMembership,
+  canonical: TaskRow,
+  duplicates: TaskRow[]
+) {
+  if (!duplicates.length) return;
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    for (const duplicate of duplicates) {
+      const duplicateCycles = await tx
+        .select()
+        .from(taskCycles)
+        .where(eq(taskCycles.taskId, duplicate.id));
+      for (const cycle of duplicateCycles) {
+        const canonicalCycleId = await ensureTaskCycleRow(tx, canonical.id, cycle.workDate);
+        await tx
+          .update(taskSubtasks)
+          .set({ taskId: canonical.id, cycleId: canonicalCycleId, updatedAt: now })
+          .where(eq(taskSubtasks.cycleId, cycle.id));
+      }
+      await tx
+        .update(timeEntries)
+        .set({ taskId: canonical.id, updatedByMembershipId: membership.membershipId, updatedAt: now })
+        .where(eq(timeEntries.taskId, duplicate.id));
+      await tx
+        .update(taskProgressUpdates)
+        .set({ taskId: canonical.id, updatedAt: now })
+        .where(eq(taskProgressUpdates.taskId, duplicate.id));
+      await tx
+        .update(taskStatusHistory)
+        .set({ taskId: canonical.id })
+        .where(eq(taskStatusHistory.taskId, duplicate.id));
+      await tx
+        .update(tasks)
+        .set({ archivedAt: now, updatedAt: now })
+        .where(eq(tasks.id, duplicate.id));
+    }
+  });
+
+  for (const duplicate of duplicates) {
+    await audit(
+      membership,
+      "task.merge_duplicate",
+      "task",
+      duplicate.id,
+      { title: duplicate.title, canonicalTaskId: canonical.id },
+      { archivedAt: now.toISOString(), canonicalTaskId: canonical.id }
+    );
+  }
+}
+
 export async function createTaskAction(
   membership: WorkTrackMembership,
   input: {
@@ -606,6 +713,8 @@ export async function createTaskAction(
     description?: string;
     teamId?: string | null;
     projectId?: string | null;
+    /** Working date for the first daily cycle/subtask checklist. */
+    workDate?: string;
     subtasks?: { id?: string; title: string; description?: string }[];
   }
 ): Promise<ActionResult> {
@@ -634,7 +743,25 @@ export async function createTaskAction(
     const checked = validateTaskTitle(input.title ?? "");
     if (!checked.ok) return checked;
     title = input.title!.trim();
+    const key = normalizeTaskTitle(title);
+    const activeTasks = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.employeeId, employeeId), isNull(tasks.archivedAt)))
+      .orderBy(asc(tasks.createdAt));
+    const matches = activeTasks.filter(
+      (row) => !row.projectId && normalizeTaskTitle(row.title) === key
+    );
+    if (matches.length) {
+      const rank = (row: TaskRow) => (row.currentStatus === "done" || row.currentStatus === "dropped" ? 1 : 0);
+      const [canonical, ...duplicates] = matches.slice().sort((a, b) => rank(a) - rank(b));
+      await mergeDuplicateFreeTitleTasks(membership, canonical, duplicates);
+      return { ok: true, taskId: canonical.id };
+    }
   }
+
+  const cycleDate = input.workDate ?? getZonedDateKey(new Date());
+  if (!isValidWorkDate(cycleDate)) return { ok: false, message: "Choose a valid working date." };
 
   const subtasks = (input.subtasks ?? []).filter((subtask) => subtask.title.trim());
   if (subtasks.length > 20) return { ok: false, message: "Add at most 20 subtasks at a time." };
@@ -675,6 +802,7 @@ export async function createTaskAction(
         statusUpdatedAt: now,
         createdByMembershipId: membership.membershipId,
       });
+      const cycleId = await ensureTaskCycleRow(tx, input.id, cycleDate);
       await tx.insert(taskStatusHistory).values({
         taskId: input.id,
         previousStatus: null,
@@ -695,6 +823,8 @@ export async function createTaskAction(
           displayOrder: index,
           statusUpdatedAt: now,
           createdByMembershipId: membership.membershipId,
+          cycleId,
+          workDate: cycleDate,
         });
         await tx.insert(subtaskStatusHistory).values({
           subtaskId,
@@ -876,12 +1006,155 @@ export async function updateTaskStatusAction(
 }
 
 /* ------------------------------------------------------------------ */
+/* Daily task cycles                                                  */
+/* ------------------------------------------------------------------ */
+
+export async function ensureTaskCycleAction(
+  membership: WorkTrackMembership,
+  input: { taskId: string; workDate: string }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  if (!isValidWorkDate(input.workDate)) return { ok: false, message: "Choose a valid working date." };
+  const task = await ownedTask(employeeId, input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  let cycleId = "";
+  await db.transaction(async (tx) => {
+    cycleId = await ensureTaskCycleRow(tx, task.id, input.workDate);
+  });
+  return { ok: true, taskId: task.id, cycleId };
+}
+
+/** Copy the latest earlier checklist into today's cycle as fresh Ongoing subtasks. */
+export async function loadPreviousTaskSubtasksAction(
+  membership: WorkTrackMembership,
+  input: { taskId: string; workDate: string }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  if (!isValidWorkDate(input.workDate)) return { ok: false, message: "Choose a valid working date." };
+  const task = await ownedTask(employeeId, input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  if (task.currentStatus === "done" || task.currentStatus === "dropped") {
+    return { ok: false, message: "Reopen the main task before loading subtasks." };
+  }
+
+  const earlierCycles = await db
+    .select()
+    .from(taskCycles)
+    .where(and(eq(taskCycles.taskId, task.id), lte(taskCycles.workDate, input.workDate)))
+    .orderBy(sql`${taskCycles.workDate} desc`);
+
+  let sourceCycle: (typeof taskCycles.$inferSelect) | undefined;
+  let sourceSubtasks: (typeof taskSubtasks.$inferSelect)[] = [];
+  for (const cycle of earlierCycles.filter((row) => row.workDate < input.workDate)) {
+    const rows = await db
+      .select()
+      .from(taskSubtasks)
+      .where(and(eq(taskSubtasks.cycleId, cycle.id), isNull(taskSubtasks.archivedAt)))
+      .orderBy(asc(taskSubtasks.displayOrder), asc(taskSubtasks.createdAt));
+    if (rows.length) {
+      sourceCycle = cycle;
+      sourceSubtasks = rows;
+      break;
+    }
+  }
+  if (!sourceCycle) return { ok: true, taskId: task.id, copied: 0, skipped: 0 };
+
+  let targetCycleId = "";
+  let nextOrder = 0;
+  await db.transaction(async (tx) => {
+    targetCycleId = await ensureTaskCycleRow(tx, task.id, input.workDate);
+    const existing = await tx
+      .select({ title: taskSubtasks.title })
+      .from(taskSubtasks)
+      .where(eq(taskSubtasks.cycleId, targetCycleId));
+    nextOrder = existing.length;
+  });
+
+  const seen = new Set(
+    await db
+      .select({ title: taskSubtasks.title })
+      .from(taskSubtasks)
+      .where(eq(taskSubtasks.cycleId, targetCycleId))
+      .then((rows) => rows.map((row) => normalizeTaskTitle(row.title)))
+  );
+  let copied = 0;
+  let skipped = 0;
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    for (const source of sourceSubtasks) {
+      const key = normalizeTaskTitle(source.title);
+      if (seen.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(key);
+      const subtaskId = randomUUID();
+      await tx.insert(taskSubtasks).values({
+        id: subtaskId,
+        taskId: task.id,
+        cycleId: targetCycleId,
+        workDate: input.workDate,
+        title: source.title,
+        description: source.description,
+        status: "ongoing",
+        displayOrder: nextOrder,
+        statusUpdatedAt: now,
+        createdByMembershipId: membership.membershipId,
+      });
+      await tx.insert(subtaskStatusHistory).values({
+        subtaskId,
+        previousStatus: null,
+        newStatus: "ongoing",
+        changedByMembershipId: membership.membershipId,
+        changeNote: `Copied from ${sourceCycle.workDate}`,
+        changedAt: now,
+      });
+      nextOrder += 1;
+      copied += 1;
+    }
+  });
+
+  await audit(membership, "task_cycle.subtasks_loaded", "task", task.id, null, {
+    workDate: input.workDate,
+    sourceDate: sourceCycle.workDate,
+    copied,
+    skipped,
+  });
+  return { ok: true, taskId: task.id, cycleId: targetCycleId, copied, skipped };
+}
+
+export async function finishTaskCycleAction(
+  membership: WorkTrackMembership,
+  input: { taskId: string; workDate: string; finished: boolean }
+): Promise<ActionResult> {
+  const employeeId = staffEmployeeId(membership);
+  if (!isValidWorkDate(input.workDate)) return { ok: false, message: "Choose a valid working date." };
+  const task = await ownedTask(employeeId, input.taskId);
+  if (!task) return { ok: false, message: "Task not found." };
+  const now = new Date();
+  let cycleId = "";
+  await db.transaction(async (tx) => {
+    cycleId = await ensureTaskCycleRow(tx, task.id, input.workDate);
+    await tx
+      .update(taskCycles)
+      .set({ finishedAt: input.finished ? now : null, updatedAt: now })
+      .where(eq(taskCycles.id, cycleId));
+  });
+  await audit(membership, "task_cycle.finish", "task", task.id, null, {
+    workDate: input.workDate,
+    finished: input.finished,
+  });
+  return { ok: true, taskId: task.id, cycleId };
+}
+
+/* ------------------------------------------------------------------ */
 /* Subtasks                                                           */
 /* ------------------------------------------------------------------ */
 
 export async function createSubtaskAction(
   membership: WorkTrackMembership,
-  input: { id: string; taskId: string; title: string; description?: string }
+  input: { id: string; taskId: string; title: string; description?: string; workDate?: string }
 ): Promise<ActionResult> {
   const employeeId = staffEmployeeId(membership);
   const task = await ownedTask(employeeId, input.taskId);
@@ -891,19 +1164,25 @@ export async function createSubtaskAction(
   }
   const title = validateSubtaskTitle(input.title);
   if (!title.ok) return title;
+  const workDate = input.workDate ?? getZonedDateKey(new Date());
+  if (!isValidWorkDate(workDate)) return { ok: false, message: "Choose a valid working date." };
 
   const existing = await db
     .select({ displayOrder: taskSubtasks.displayOrder })
     .from(taskSubtasks)
-    .where(eq(taskSubtasks.taskId, input.taskId))
+    .where(and(eq(taskSubtasks.taskId, input.taskId), eq(taskSubtasks.workDate, workDate)))
     .orderBy(asc(taskSubtasks.displayOrder));
   const displayOrder = existing.length ? existing[existing.length - 1].displayOrder + 1 : 0;
   const now = new Date();
+  let cycleId = "";
 
   await db.transaction(async (tx) => {
+    cycleId = await ensureTaskCycleRow(tx, task.id, workDate);
     await tx.insert(taskSubtasks).values({
       id: input.id,
       taskId: input.taskId,
+      cycleId,
+      workDate,
       title: input.title.trim(),
       description: input.description?.trim() || null,
       status: "ongoing",
@@ -920,8 +1199,12 @@ export async function createSubtaskAction(
       changedAt: now,
     });
   });
-  await audit(membership, "subtask.create", "subtask", input.id, null, { title: input.title.trim(), taskId: input.taskId });
-  return { ok: true, taskId: input.taskId, subtaskId: input.id };
+  await audit(membership, "subtask.create", "subtask", input.id, null, {
+    title: input.title.trim(),
+    taskId: input.taskId,
+    workDate,
+  });
+  return { ok: true, taskId: input.taskId, subtaskId: input.id, cycleId };
 }
 
 export async function updateSubtaskAction(
@@ -1175,16 +1458,16 @@ export async function addWorkEntryAction(
     }
     taskId = task.id;
     subtaskId = input.subtaskId?.trim() || null;
-    if (subtaskId) {
-      const subtask = await ownedSubtask(taskId, subtaskId);
-      if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
-    }
+    const dateCheck = await validateEntrySubtaskDate(taskId, subtaskId, input.startAt);
+    if (!dateCheck.ok) return dateCheck;
   }
 
   const split = splitFor(input);
   const duration = minutesBetween(input.startAt, input.endAt);
+  const workDate = taskId ? entryWorkDate(input.startAt) : "";
 
   await db.transaction(async (tx) => {
+    if (taskId) await ensureTaskCycleRow(tx, taskId, workDate);
     await tx.insert(timeEntries).values({
       id: input.id,
       employeeId,
@@ -1309,15 +1592,15 @@ export async function editWorkEntryAction(
     }
     taskId = task.id;
     subtaskId = input.subtaskId?.trim() || null;
-    if (subtaskId) {
-      const subtask = await ownedSubtask(taskId, subtaskId);
-      if (!subtask) return { ok: false, message: "That subtask does not belong to the selected task." };
-    }
+    const dateCheck = await validateEntrySubtaskDate(taskId, subtaskId, input.startAt);
+    if (!dateCheck.ok) return dateCheck;
   }
 
   const split = splitFor(input);
   const duration = minutesBetween(input.startAt, input.endAt);
+  const workDate = taskId ? entryWorkDate(input.startAt) : "";
   await db.transaction(async (tx) => {
+    if (taskId) await ensureTaskCycleRow(tx, taskId, workDate);
     await tx
       .update(timeEntries)
       .set({
@@ -1412,8 +1695,7 @@ export async function copyEntriesToDayAction(
   input: { fromDateKey: string; toDateKey: string }
 ): Promise<ActionResult & { copied?: number; skipped?: number }> {
   const employeeId = staffEmployeeId(membership);
-  const dateShape = /^\d{4}-\d{2}-\d{2}$/;
-  if (!dateShape.test(input.fromDateKey) || !dateShape.test(input.toDateKey)) {
+  if (!isValidWorkDate(input.fromDateKey) || !isValidWorkDate(input.toDateKey)) {
     return { ok: false, message: "Choose valid dates." };
   }
   if (input.fromDateKey === input.toDateKey) {
@@ -1441,6 +1723,19 @@ export async function copyEntriesToDayAction(
   // Work on a closed task cannot be re-created; skip those rows.
   const taskRows = await db.select().from(tasks).where(eq(tasks.employeeId, employeeId));
   const closedTaskIds = new Set(taskRows.filter((task) => task.currentStatus === "done" || task.currentStatus === "dropped").map((task) => task.id));
+
+  // Subtasks are date-scoped. Reuse a same-titled subtask already on the target
+  // date; otherwise drop the link rather than pointing at another day's row.
+  const sourceTaskIds = [...new Set(source.filter((row) => row.taskId).map((row) => row.taskId!))];
+  const sourceSubtaskIds = [...new Set(source.filter((row) => row.subtaskId).map((row) => row.subtaskId!))];
+  let sourceSubtasks: (typeof taskSubtasks.$inferSelect)[] = [];
+  let targetSubtasks: (typeof taskSubtasks.$inferSelect)[] = [];
+  if (sourceSubtaskIds.length) {
+    sourceSubtasks = await db.select().from(taskSubtasks).where(inArray(taskSubtasks.id, sourceSubtaskIds));
+  }
+  if (sourceTaskIds.length) {
+    targetSubtasks = await db.select().from(taskSubtasks).where(inArray(taskSubtasks.taskId, sourceTaskIds));
+  }
 
   let copied = 0;
   let skipped = 0;
@@ -1477,12 +1772,30 @@ export async function copyEntriesToDayAction(
       const split = row.isReportedOvertime
         ? { normalMinutes: 0, overtimeMinutes: duration }
         : splitIntervalMinutes(start.toISOString(), end.toISOString());
+      const sourceSubtask = row.subtaskId
+        ? sourceSubtasks.find((subtask) => subtask.id === row.subtaskId)
+        : undefined;
+      let copiedSubtaskId = row.subtaskId;
+      if (sourceSubtask?.workDate && sourceSubtask.workDate !== input.toDateKey) {
+        const matchingSubtask = targetSubtasks.find(
+          (subtask) =>
+            subtask.taskId === row.taskId &&
+            subtask.workDate === input.toDateKey &&
+            !subtask.archivedAt &&
+            normalizeTaskTitle(subtask.title) === normalizeTaskTitle(sourceSubtask.title)
+        );
+        copiedSubtaskId = matchingSubtask?.id ?? null;
+      }
+      if (row.taskId) {
+        await db.insert(taskCycles).values({ taskId: row.taskId, workDate: input.toDateKey })
+          .onConflictDoNothing({ target: [taskCycles.taskId, taskCycles.workDate] });
+      }
       await db.insert(timeEntries).values({
         id,
         employeeId,
         entryType: "work",
         taskId: row.taskId,
-        subtaskId: row.subtaskId,
+        subtaskId: copiedSubtaskId,
         clientCategoryId: row.clientCategoryId,
         clientSubcategoryId: row.clientSubcategoryId,
         description: row.description,

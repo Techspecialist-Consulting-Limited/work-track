@@ -422,10 +422,12 @@ class ApiComplaintsRepository implements ComplaintsRepository {
 
   @override
   Future<void> reopenComplaint(String complaintId, {String note = 'Reopened by staff.'}) async {
+    final trimmedNote = note.trim();
+    // Backend requires type=reopen and a reason of at least 5 characters.
+    final reason = trimmedNote.length >= 5 ? trimmedNote : 'Reopened by staff.';
     await _api.postJson('/api/complaints/$complaintId', {
-      'type': 'setStatus',
-      'toStatus': 'reopened',
-      'note': note,
+      'type': 'reopen',
+      'reason': reason,
     });
   }
 
