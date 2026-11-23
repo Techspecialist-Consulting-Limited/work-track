@@ -55,3 +55,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Backups & recovery (Supabase Free has no automatic backups)
+
+- `npm run db:backup` → `backups/worktrack-backup-<timestamp>.json.gz` (all public tables, one consistent snapshot; gitignored — contains real staff data). `--upload` also copies it to the private Storage bucket `worktrack-backups` (create once, uncheck public).
+- `.github/workflows/db-backup.yml` runs it daily (needs repo secret `DATABASE_URL`; repo must stay private) and keeps the artifact 30 days.
+- After an accidental deletion: `npm run db:restore-missing -- backups/<file> ` is a **dry run**; add `--apply` to restore. It only inserts rows missing from the live DB (`ON CONFLICT DO NOTHING`) and never updates or deletes, so newer data is safe. `--tables a,b` limits it.
+- Always take a backup (`npm run db:backup`) before running `reset-db.mjs`, seeds, or any bulk script, and never point agents at the production `DATABASE_URL` for destructive work.

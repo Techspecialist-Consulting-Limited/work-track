@@ -1,0 +1,32 @@
+name: Database backup
+
+# Daily logical backup of the Supabase database (Free plan has no automatic backups).
+# Requires repository secret DATABASE_URL (same value as .env.local). Optionally
+# SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY to also copy to the private `worktrack-backups` bucket.
+# The artifact contains real staff data: keep this repository PRIVATE.
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Back up database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/backup-db.mjs --keep 1 ${{ secrets.SUPABASE_URL != '' && '--upload' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worktrack-db-backup
+          path: backups/*.json.gz
+          retention-days: 30
