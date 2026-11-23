@@ -172,6 +172,20 @@ export interface Subtask {
   statusSource?: RecoveryStatusSource;
   detailsSource?: RecoveryDetailsSource;
   recoveryImportId?: string;
+  /** Daily cycle this subtask belongs to; absent only on unmigrated fixtures. */
+  cycleId?: string;
+  /** Selected Lagos working date, in YYYY-MM-DD form. */
+  workDate?: string;
+}
+
+/** One reusable main task has one cycle per working date. */
+export interface TaskCycle {
+  id: string;
+  taskId: TaskId;
+  workDate: string;
+  finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProgressUpdateRevision {
@@ -283,6 +297,8 @@ export interface WorkLogDatabase {
   categories: TaskCategory[];
   tasks: Task[];
   subtasks: Subtask[];
+  /** Optional so older serialized snapshots remain readable. */
+  taskCycles?: TaskCycle[];
   progressUpdates: ProgressUpdate[];
   entries: WorkEntry[];
   breaks: BreakEntry[];

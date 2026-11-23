@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test \"tests/*.test.mts\""
+    "test": "node --import tsx --test \"tests/*.test.mts\"",
+    "db:backup": "node --env-file=.env.local scripts/backup-db.mjs",
+    "db:restore-missing": "node --env-file=.env.local scripts/restore-missing.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",

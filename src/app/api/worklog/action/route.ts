@@ -31,7 +31,10 @@ import {
   editProgressUpdateAction,
   editWorkEntryAction,
   endBreakAction,
+  ensureTaskCycleAction,
+  finishTaskCycleAction,
   inviteChairmanAction,
+  loadPreviousTaskSubtasksAction,
   promoteTeamProjectAction,
   reviewClientSuggestionAction,
   selectTeamAction,
@@ -100,6 +103,15 @@ export async function POST(request: Request) {
         break;
       case "createSubtask":
         result = await createSubtaskAction(membership, p as never);
+        break;
+      case "ensureTaskCycle":
+        result = await ensureTaskCycleAction(membership, p as never);
+        break;
+      case "loadPreviousTaskSubtasks":
+        result = await loadPreviousTaskSubtasksAction(membership, p as never);
+        break;
+      case "finishTaskCycle":
+        result = await finishTaskCycleAction(membership, p as never);
         break;
       case "updateSubtask":
         result = await updateSubtaskAction(membership, p as never);

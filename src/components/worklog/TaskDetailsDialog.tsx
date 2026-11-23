@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -26,10 +26,14 @@ import {
   getProjectsForTeam,
   getSubtaskById,
   getSubtaskStatusHistory,
-  getSubtasksForTask,
   getTaskById,
   getTaskStatusHistory,
 } from "@/lib/worklog/selectors";
+import {
+  getLatestPriorCycle,
+  getSubtasksForDate,
+  getTaskCycleForDate,
+} from "@/lib/worklog/task-cycles";
 import { dateKeyOf, durationMinutes, formatDateLabel, formatMinutes, formatTime } from "@/lib/worklog/time";
 import type { TaskStatus } from "@/lib/worklog/types";
 import { StatusBadge } from "./StatusBadge";
@@ -61,7 +65,7 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
   }
 
   function renderTaskCard(item: (typeof c.employeeTasks)[number], note?: string) {
-    const subtasks = getSubtasksForTask(c.db, item.id);
+    const subtasks = getSubtasksForDate(c.db.subtasks, item.id, c.tasksDateKey);
     const summary = subtaskSummary(subtasks);
     const selected = selectedId === item.id;
     return (
@@ -317,7 +321,15 @@ export function TaskDetailsDialog({ c }: { c: WorkLogController }) {
 
           <div className={`min-h-0 overflow-y-auto ${task ? "block" : "hidden lg:block"}`}>
             {task ? (
-              <TaskPanel c={c} taskId={task.id} tab={tab} setTab={setTab} error={error} setError={setError} />
+              <TaskPanel
+                key={task.id}
+                c={c}
+                taskId={task.id}
+                tab={tab}
+                setTab={setTab}
+                error={error}
+                setError={setError}
+              />
             ) : (
               <div className="grid h-full place-items-center p-6 text-center">
                 <div>
@@ -350,20 +362,22 @@ function TaskPanel({
   setError: (message: string | null) => void;
 }) {
   const task = getTaskById(c.db, taskId);
-  const subtasks = getSubtasksForTask(c.db, taskId);
+  const subtasks = getSubtasksForDate(c.db.subtasks, taskId, c.tasksDateKey);
+  const cycle = getTaskCycleForDate(c.db, taskId, c.tasksDateKey);
+  const hasPreviousCycle = Boolean(getLatestPriorCycle(c.db, taskId, c.tasksDateKey));
   const progress = getProgressUpdatesForTask(c.db, taskId);
   const summary = subtaskSummary(subtasks);
   const entries = c.db.entries.filter((entry) => entry.taskId === taskId);
   const loggedMinutes = entries.reduce((total, entry) => total + durationMinutes(entry.startAt, entry.endAt), 0);
 
-  const [draft, setDraft] = useState({
-    id: "",
-    title: "",
-    description: "",
-    categoryId: "",
-    teamId: "",
-    projectId: "",
-  });
+  const [draft, setDraft] = useState(() => ({
+    id: task?.id ?? "",
+    title: task?.title ?? "",
+    description: task?.description ?? "",
+    categoryId: task?.categoryId ?? "",
+    teamId: task?.teamId ?? "",
+    projectId: task?.projectId ?? "",
+  }));
   const [statusReason, setStatusReason] = useState("");
   const [subtaskDraft, setSubtaskDraft] = useState({ title: "", description: "" });
   const [editingSubtask, setEditingSubtask] = useState({ id: "", title: "", description: "" });
@@ -372,25 +386,13 @@ function TaskPanel({
   const [editingProgress, setEditingProgress] = useState({ id: "", body: "", reason: "" });
   const [expandedRevisions, setExpandedRevisions] = useState<Record<string, boolean>>({});
 
-  if (!task) return null;
-
-  if (draft.id !== task.id) {
-    setDraft({
-      id: task.id,
-      title: task.title,
-      description: task.description ?? "",
-      categoryId: task.categoryId ?? "",
-      teamId: task.teamId ?? "",
-      projectId: task.projectId ?? "",
-    });
-    setStatusReason("");
-    setSubtaskDraft({ title: "", description: "" });
-    setEditingSubtask({ id: "", title: "", description: "" });
-    setSubtaskPrompt(null);
-    setProgressDraft({ body: "", subtaskId: "" });
-    setEditingProgress({ id: "", body: "", reason: "" });
+  // The parent keys this panel by task id, so switching tasks remounts it with
+  // fresh draft state. Clear any stale error once the new panel mounts.
+  useEffect(() => {
     setError(null);
-  }
+  }, [taskId, setError]);
+
+  if (!task) return null;
 
   const taskHistory = getTaskStatusHistory(c.db, taskId);
   const subtaskHistory = subtasks.flatMap((subtask) =>
@@ -426,7 +428,7 @@ function TaskPanel({
   }
 
   function addSubtask() {
-    const result = c.addSubtask(taskId, subtaskDraft.title, subtaskDraft.description);
+    const result = c.addSubtask(taskId, subtaskDraft.title, subtaskDraft.description, c.tasksDateKey);
     if (!result.ok) setError(result.message);
     else {
       setSubtaskDraft({ title: "", description: "" });
@@ -607,6 +609,41 @@ function TaskPanel({
                 <Check size={13} aria-hidden="true" /> All subtasks settled — mark task Done
               </button>
             ) : null}
+          </section>
+
+          <section aria-labelledby="daily-cycle-heading" className="border-t border-[#EEEAF2] pt-3">
+            <h4 id="daily-cycle-heading" className="text-[13px] font-semibold text-[#39364F]">
+              Daily cycle · {formatDateLabel(c.tasksDateKey)}
+            </h4>
+            <p className="mt-0.5 text-[11px] text-[#777A91]">
+              Finish for today closes only this date. The main task stays reusable.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                disabled={!hasPreviousCycle || c.loadingPreviousSubtasks || task.currentStatus === "done" || task.currentStatus === "dropped"}
+                onClick={() => void c.loadSubtasksFromPreviousDay(taskId, c.tasksDateKey)}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-[#E7E6F0] bg-white px-3 text-[11px] font-semibold text-[#53506B] hover:bg-[#F7F7FC] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {c.loadingPreviousSubtasks ? "Loading…" : "Load previous subtasks"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const result = c.finishCycle(taskId, !cycle?.finishedAt, c.tasksDateKey);
+                  if (!result.ok) setError(result.message);
+                  else setError(null);
+                }}
+                className={`inline-flex min-h-9 items-center gap-1.5 rounded-lg border px-3 text-[11px] font-semibold ${
+                  cycle?.finishedAt
+                    ? "border-[#A7E8C4] bg-[#ECFDF5] text-[#047857]"
+                    : "border-[#CFC8F3] bg-[#F5F1FF] text-[#5A3ED0]"
+                }`}
+              >
+                <Check size={13} aria-hidden="true" />
+                {cycle?.finishedAt ? "Finished for today — reopen" : "Finish for today"}
+              </button>
+            </div>
           </section>
 
           <section aria-labelledby="task-edit-heading" className="border-t border-[#EEEAF2] pt-3">
